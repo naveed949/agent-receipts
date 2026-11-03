@@ -1,0 +1,16 @@
+{
+  "name": "agent-receipts",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "napi build --platform --release",
+    "test": "node --test test/canonicalize.test.cjs"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.4.1",
+    "@emnapi/runtime": "1.11.3"
+  }
+}

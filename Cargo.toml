@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "bindings/python"]
+members = ["crates/core", "bindings/python", "bindings/node"]
 
 [workspace.package]
 version = "0.0.0"
