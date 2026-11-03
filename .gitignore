@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.whl
+node_modules/
+bindings/node/index.js
+bindings/node/index.d.ts
+bindings/node/*.node

@@ -1,0 +1,18 @@
+[package]
+name = "agent-receipts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde_json = "1"
+
+[dev-dependencies]
+base64 = "0.22"
+serde_json = "1"
+
+[[test]]
+name = "vectors"
+harness = false
