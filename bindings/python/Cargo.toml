@@ -1,0 +1,18 @@
+[package]
+name = "agent-receipts-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "agent_receipts"
+crate-type = ["cdylib", "rlib"]
+test = false
+doctest = false
+
+[dependencies]
+# The cdylib crate name is agent_receipts, so the core crate is renamed here.
+receipts = { package = "agent-receipts", path = "../../crates/core" }
+pyo3 = { version = "0.29.3", features = ["abi3-py39", "extension-module"] }
