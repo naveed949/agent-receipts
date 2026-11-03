@@ -19,7 +19,7 @@ napi-derive = "=3.3.0"
 napi-sys = "=3.0.1"
 # 3.0.1 and later need rustc 1.88. napi-derive 3.3.0 allows them.
 napi-derive-backend = "=3.0.0"
-# 1.13 needs rustc 1.85. convert_case 0.8 allows it.
+# 1.13.2 and later declare rust-version 1.85. convert_case 0.8 allows them.
 unicode-segmentation = "=1.12.0"
 
 [build-dependencies]

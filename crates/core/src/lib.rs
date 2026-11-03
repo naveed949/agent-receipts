@@ -1,15 +1,9 @@
-//! Provisional canonical bytes for agent action receipts.
-//!
-//! [`canonicalize_bytes`] rewrites JSON through `serde_json`.
-//! HMAC verification and authority comparison are not implemented.
-
 /// Name reserved for a parsed receipt. No constructor in this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Receipt {
     _private: (),
 }
 
-/// Failure from [`canonicalize_bytes`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     NotUtf8,
