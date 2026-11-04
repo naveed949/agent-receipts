@@ -280,6 +280,7 @@ run_node_surface() {
 
 build_rust_dump() {
   local dump_dir=$EVIDENCE/dump-canonicalize
+  local dump_bin=$dump_dir/target/debug/dump-canonicalize
   mkdir -p "$dump_dir/src"
   cat >"$dump_dir/Cargo.toml" <<EOF
 [package]
@@ -288,24 +289,39 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[workspace]
+
 [dependencies]
 agent-receipts = { path = "$REPO_ROOT/crates/core" }
 EOF
   cp "$SCRIPT_DIR/dump_canonicalize.rs" "$dump_dir/src/main.rs"
-  cargo build --manifest-path "$dump_dir/Cargo.toml" --target-dir "$REPO_ROOT/target"
+  rm -f "$dump_bin"
+  if ! cargo build --manifest-path "$dump_dir/Cargo.toml" --target-dir "$dump_dir/target"; then
+    echo "dump-canonicalize cargo build failed" >&2
+    return 1
+  fi
+  if [[ ! -x "$dump_bin" ]]; then
+    echo "dump-canonicalize binary missing at $dump_bin" >&2
+    return 1
+  fi
 }
 
 run_agreement() {
   local python=$1
   local logf=$EVIDENCE/cross-language-agreement.log
+  local dump_bin=$EVIDENCE/dump-canonicalize/target/debug/dump-canonicalize
   (
     set -euo pipefail
     build_rust_dump
+    if [[ ! -x "$dump_bin" ]]; then
+      echo "dump-canonicalize binary missing at $dump_bin" >&2
+      exit 1
+    fi
     echo "+ $python $SCRIPT_DIR/agree.py"
     "$python" "$SCRIPT_DIR/agree.py" \
       --reference "$REPO_ROOT/vectors/reference" \
       --text "$REPO_ROOT/vectors/text" \
-      --rust-dump "$REPO_ROOT/target/debug/dump-canonicalize" \
+      --rust-dump "$dump_bin" \
       --node-binding "$REPO_ROOT/bindings/node" \
       --node-dump "$SCRIPT_DIR/dump_canonicalize.cjs"
   ) >"$logf" 2>&1

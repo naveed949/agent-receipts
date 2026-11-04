@@ -113,7 +113,11 @@ test("host rejects", () => {
   assertCode(() => 1, "type_error");
   assertCode(new Date(), "type_error");
   assertCode(new Map(), "type_error");
+  assertCode(new Set(), "type_error");
   assertCode(Buffer.from("[]"), "type_error");
+  assertCode(new Uint8Array([1, 2, 3]), "type_error");
+  assertCode(new ArrayBuffer(4), "type_error");
+  assertCode(new DataView(new ArrayBuffer(4)), "type_error");
   class Box {
     constructor() {
       this.a = 1;
@@ -147,6 +151,29 @@ test("host rejects", () => {
   assertCode(sparse, "type_error");
 });
 
+test("every proxy is type_error", () => {
+  class Box {
+    constructor() {
+      this.a = 1;
+    }
+  }
+  const targets = [
+    Buffer.from([1, 2, 3]),
+    new Uint8Array([1, 2, 3]),
+    new Date(),
+    new Map(),
+    new Set(),
+    new Box(),
+    new DataView(new ArrayBuffer(4)),
+    new ArrayBuffer(4),
+    { a: 1 },
+    [1, 2, 3],
+  ];
+  for (const target of targets) {
+    assertCode(new Proxy(target, {}), "type_error");
+  }
+});
+
 test("a throwing getter is left alone", () => {
   const boom = {};
   Object.defineProperty(boom, "a", {
@@ -176,6 +203,19 @@ test("cycles depth and shared values", () => {
   assert.equal(canonicalJson({ a: shared, b: shared }), '{"a":{"k":1},"b":{"k":1}}');
   assert.equal(canonicalJson(nest(128)), `${"[".repeat(128)}null${"]".repeat(128)}`);
   assertCode(nest(129), "too_deep");
+  class Box {
+    constructor() {
+      this.a = 1;
+    }
+  }
+  assertCode(nestLeaf(128, new Date()), "type_error");
+  assertCode(nestLeaf(128, new Map()), "type_error");
+  assertCode(nestLeaf(128, Buffer.from("x")), "type_error");
+  assertCode(nestLeaf(128, new Box()), "type_error");
+  assert.equal(canonicalJson(nestLeaf(128, "hi")), `${"[".repeat(128)}"hi"${"]".repeat(128)}`);
+  assert.equal(canonicalJson(nestObjects(128)), `${'{"k":'.repeat(127)}{}${"}".repeat(127)}`);
+  assertCode(nestObjects(129), "too_deep");
+  assertCode(nestLeaf(128, {}), "too_deep");
 });
 
 function loadReference() {
@@ -333,9 +373,21 @@ function assertCode(value, code) {
 }
 
 function nest(depth) {
-  let value = null;
+  return nestLeaf(depth, null);
+}
+
+function nestLeaf(depth, leaf) {
+  let value = leaf;
   for (let index = 0; index < depth; index += 1) {
     value = [value];
+  }
+  return value;
+}
+
+function nestObjects(depth) {
+  let value = {};
+  for (let index = 1; index < depth; index += 1) {
+    value = { k: value };
   }
   return value;
 }

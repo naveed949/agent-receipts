@@ -44,9 +44,9 @@ Whitespace is the space, tab, line feed, and carriage return. The input must con
 
 ## Limits
 
-Containers nest at most 128 deep. Only containers count, including the outermost one. 128 nested containers succeed. 129 is rejected.
+Containers nest at most 128 deep. Only containers count, including the outermost one. 128 nested containers succeed. 129 is rejected. The host walk decides the type of a value before it counts that value toward the depth limit. A rejected host type inside 128 arrays is `type_error`, not `too_deep`. A string inside 128 arrays does not count as a container.
 
-A host container that appears again among its ancestors is rejected. A value that is shared but is not an ancestor is written twice. The tree itself cannot contain a cycle.
+A host container that appears again among its ancestors is rejected. A value that is shared but is not an ancestor is written twice. The tree itself cannot contain a cycle. Node rejects every `Proxy`.
 
 ## Error codes
 
@@ -58,4 +58,4 @@ The code string is the contract. The message text is the same code on the Python
 | Grammar, trailing junk, empty input, a duplicate key, or a non-finite number in text | `invalid_json` |
 | More than 128 nested containers | `too_deep` |
 | A host container is its own ancestor | `cycle` |
-| A host value that this format does not store, including `undefined`, a bigint, NaN, infinity, a non-exact Python int, a date, a map, a sparse array, a function, a symbol, or a class instance | `type_error` |
+| A host value that this format does not store, including `undefined`, a bigint, NaN, infinity, a non-exact Python int, a date, a map, a sparse array, a function, a symbol, a class instance, or any Node `Proxy` | `type_error` |

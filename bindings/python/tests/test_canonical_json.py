@@ -200,6 +200,18 @@ def test_cycles_depth_and_shared_values():
     assert canonical_json({"a": shared, "b": shared}) == '{"a":{"k":1},"b":{"k":1}}'
     assert canonical_json(nest(128)) == "[" * 128 + "null" + "]" * 128
     assert_code(nest(129), "too_deep")
+    assert_code(nest_leaf(128, datetime(2020, 1, 1)), "type_error")
+    assert_code(nest_leaf(128, b"x"), "type_error")
+    assert_code(nest_leaf(128, ()), "type_error")
+
+    class Bag:
+        pass
+
+    assert_code(nest_leaf(128, Bag()), "type_error")
+    assert canonical_json(nest_leaf(128, "hi")) == "[" * 128 + '"hi"' + "]" * 128
+    assert canonical_json(nest_objects(128)) == '{"k":' * 127 + "{}" + "}" * 127
+    assert_code(nest_objects(129), "too_deep")
+    assert_code(nest_leaf(128, {}), "too_deep")
 
 
 def load_reference():
@@ -357,7 +369,18 @@ def decode_field(field):
 
 
 def nest(depth):
-    value = None
+    return nest_leaf(depth, None)
+
+
+def nest_leaf(depth, leaf):
+    value = leaf
     for _ in range(depth):
         value = [value]
+    return value
+
+
+def nest_objects(depth):
+    value = {}
+    for _ in range(1, depth):
+        value = {"k": value}
     return value

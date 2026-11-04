@@ -16,6 +16,7 @@ enum Fail {
 struct Host<'a> {
     env: &'a Env,
     object_ctor: napi_value,
+    is_proxy: napi_value,
     object_proto: JsUnknown<'a>,
     array_proto: JsUnknown<'a>,
 }
@@ -73,9 +74,13 @@ impl<'a> Host<'a> {
             .map_err(Fail::Host)?
             .get_named_property("prototype")
             .map_err(Fail::Host)?;
+        let is_proxy: JsUnknown = env
+            .run_script("process.getBuiltinModule('node:util').types.isProxy")
+            .map_err(Fail::Host)?;
         Ok(Self {
             env,
             object_ctor: object_ctor.raw(),
+            is_proxy: is_proxy.raw(),
             object_proto,
             array_proto,
         })
@@ -115,13 +120,13 @@ fn walk_object(
     ancestors: &mut Vec<napi_value>,
     depth: usize,
 ) -> Result<Json, Fail> {
-    if is_ancestor(host, ancestors, value.raw())? {
-        return Err(Fail::Core(Error::Cycle));
+    if is_proxy(host, value.raw())? {
+        return Err(Fail::Core(Error::TypeError));
     }
-    agent_receipts::check_depth(depth + 1).map_err(Fail::Core)?;
     if value.is_buffer().map_err(Fail::Host)?
         || value.is_typedarray().map_err(Fail::Host)?
         || value.is_dataview().map_err(Fail::Host)?
+        || value.is_arraybuffer().map_err(Fail::Host)?
     {
         return Err(Fail::Core(Error::TypeError));
     }
@@ -169,7 +174,7 @@ fn walk_array(
     if data.iter().any(|units| !canonical_index(units, length)) {
         return Err(Fail::Core(Error::TypeError));
     }
-    ancestors.push(value.raw());
+    enter_container(host, ancestors, value.raw(), depth)?;
     let result = (|| {
         let mut items = Vec::with_capacity(length as usize);
         for index in 0..length {
@@ -196,7 +201,7 @@ fn walk_plain(
         return Err(Fail::Core(Error::TypeError));
     }
     let names = own_string_names(host, object.raw())?;
-    ancestors.push(value.raw());
+    enter_container(host, ancestors, value.raw(), depth)?;
     let result = (|| {
         let mut entries = Vec::with_capacity(names.len());
         for name in names {
@@ -214,6 +219,39 @@ fn walk_plain(
     })();
     ancestors.pop();
     result
+}
+
+fn enter_container(
+    host: &Host<'_>,
+    ancestors: &mut Vec<napi_value>,
+    raw: napi_value,
+    depth: usize,
+) -> Result<(), Fail> {
+    if is_ancestor(host, ancestors, raw)? {
+        return Err(Fail::Core(Error::Cycle));
+    }
+    agent_receipts::check_depth(depth + 1).map_err(Fail::Core)?;
+    ancestors.push(raw);
+    Ok(())
+}
+
+fn is_proxy(host: &Host<'_>, value: napi_value) -> Result<bool, Fail> {
+    let args = [value];
+    let mut result = ptr::null_mut();
+    check_status!(unsafe {
+        sys::napi_call_function(
+            host.env.raw(),
+            host.object_ctor,
+            host.is_proxy,
+            args.len(),
+            args.as_ptr(),
+            &mut result,
+        )
+    })
+    .map_err(Fail::Host)?;
+    raw_unknown(host, result)
+        .coerce_to_bool()
+        .map_err(Fail::Host)
 }
 
 fn reject_symbol_keys(host: &Host<'_>, object: napi_value) -> Result<(), Fail> {

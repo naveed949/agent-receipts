@@ -32,3 +32,4 @@ Preconditions:
 - Text files are Rust and Python only. A log that launches Node for those files is not this surface.
 - Do not mark this passed when any language was skipped.
 - Pending lines are required. A runner that skips them without counting fails the `pending 12` line.
+- `--evidence-dir` may sit inside the checkout. The dump crate has its own `[workspace]` and its own `target/`. A failed dump build is `FAIL`. The agreement row does not reuse `target/debug/dump-canonicalize` from the workspace.
