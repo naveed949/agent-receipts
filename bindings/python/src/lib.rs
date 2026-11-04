@@ -21,7 +21,6 @@ enum Fail {
 #[pyfunction]
 fn canonical_json(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<String> {
     let input = read_input(value).map_err(|err| fail_to_py(py, err))?;
-    // The closure owns the tree, so the core does not borrow Python memory.
     let result = py.detach(move || match input {
         Input::Bytes(bytes) => receipts::canonical_json(&bytes).and_then(decode_utf8),
         Input::Value(value) => receipts::canonical_json_value(&value).and_then(decode_utf8),
@@ -58,7 +57,6 @@ fn walk(value: &Bound<'_, PyAny>, ancestors: &mut Vec<usize>, depth: usize) -> R
     if value.is_none() {
         return Ok(Json::null());
     }
-    // `bool` is a subclass of `int`. The bool test has to run first.
     if let Ok(flag) = value.cast_exact::<PyBool>() {
         return Ok(Json::bool(flag.is_true()));
     }

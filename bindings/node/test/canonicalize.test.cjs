@@ -233,7 +233,6 @@ function checkSuccess(value, expected, name) {
   const gotHex = Buffer.from(text, "utf8").toString("hex");
   assert.equal(gotHex, expected.canonicalUtf8Hex, name);
   assert.equal(digest, expected.stableHash, name);
-  // A Node string is a JSON string. The bytes second pass is Rust and Python.
   assert.equal(canonicalJson(decoded), text, name);
   assert.equal(stableHash(decoded), digest, name);
 }

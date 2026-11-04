@@ -28,7 +28,7 @@ pub enum Error {
 }
 
 impl Error {
-    /// Stable code copied onto host exceptions. Display writes the same string.
+    /// Stable code copied onto host exceptions.
     pub fn code(self) -> &'static str {
         match self {
             Error::NotUtf8 => "not_utf8",
@@ -72,7 +72,6 @@ impl Wtf16 {
     }
 }
 
-/// Finite `f64`. Zero is stored with the sign bit clear, so `-0` is not a value.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Finite(f64);
 
@@ -81,12 +80,7 @@ impl Finite {
         if !value.is_finite() {
             return None;
         }
-        // -0 and +0 are one value. A later formatter must not see a sign bit.
-        if value == 0.0 {
-            Some(Self(0.0))
-        } else {
-            Some(Self(value))
-        }
+        Some(Self(if value == 0.0 { 0.0 } else { value }))
     }
 
     fn get(self) -> f64 {

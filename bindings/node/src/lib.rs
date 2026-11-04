@@ -15,7 +15,6 @@ enum Fail {
 
 struct Host<'a> {
     env: &'a Env,
-    // `Object` is a function. napi rejects it as an `Object` value.
     object_ctor: napi_value,
     object_proto: JsUnknown<'a>,
     array_proto: JsUnknown<'a>,
