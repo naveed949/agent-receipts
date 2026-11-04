@@ -7,12 +7,12 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-serde = "1"
-serde_json = { version = "1", features = ["float_roundtrip"] }
+ryu-js = "=1.0.3"
+sha2 = "=0.10.8"
 
 [dev-dependencies]
 base64 = "0.22"
-serde_json = "1"
+sha2 = "=0.10.8"
 
 [[test]]
 name = "vectors"

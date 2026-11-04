@@ -1,7 +1,16 @@
+mod emit;
+mod parse;
+
+use std::cmp::Ordering;
 use std::fmt;
 
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
-use serde_json::{Map, Number, Value};
+use sha2::{Digest, Sha256};
+
+#[cfg(test)]
+mod reference;
+
+/// Maximum nested containers. The outermost container counts.
+pub const MAX_DEPTH: usize = 128;
 
 /// Name reserved for a parsed receipt. No constructor in this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,112 +22,226 @@ pub struct Receipt {
 pub enum Error {
     NotUtf8,
     InvalidJson,
+    TooDeep,
+    Cycle,
+    TypeError,
 }
 
 impl Error {
-    /// Stable code copied onto host exceptions.
+    /// Stable code copied onto host exceptions. Display writes the same string.
     pub fn code(self) -> &'static str {
         match self {
             Error::NotUtf8 => "not_utf8",
             Error::InvalidJson => "invalid_json",
+            Error::TooDeep => "too_deep",
+            Error::Cycle => "cycle",
+            Error::TypeError => "type_error",
         }
     }
 }
 
 impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.code())
     }
 }
 
 impl std::error::Error for Error {}
 
-struct StrictValue(Value);
+/// UTF-16 code units. Unpaired surrogates are valid data. This is not a Rust str.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Wtf16 {
+    units: Vec<u16>,
+}
 
-impl<'de> Deserialize<'de> for StrictValue {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(StrictVisitor).map(StrictValue)
+impl Wtf16 {
+    pub fn from_units(units: Vec<u16>) -> Self {
+        Self { units }
+    }
+
+    /// Encode each Unicode scalar. A Rust str has no unpaired surrogate.
+    #[allow(clippy::should_implement_trait)] // Infallible. `FromStr` returns `Result`.
+    pub fn from_str(text: &str) -> Self {
+        Self {
+            units: text.encode_utf16().collect(),
+        }
+    }
+
+    pub fn units(&self) -> &[u16] {
+        &self.units
     }
 }
 
-struct StrictVisitor;
+/// Finite `f64`. Zero is stored with the sign bit clear, so `-0` is not a value.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Finite(f64);
 
-impl<'de> Visitor<'de> for StrictVisitor {
-    type Value = Value;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a JSON value")
-    }
-
-    fn visit_bool<E>(self, value: bool) -> Result<Value, E> {
-        Ok(Value::Bool(value))
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Value, E> {
-        Ok(Value::Number(value.into()))
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Value, E> {
-        Ok(Value::Number(value.into()))
-    }
-
-    fn visit_i128<E: de::Error>(self, value: i128) -> Result<Value, E> {
-        Number::deserialize(de::value::I128Deserializer::new(value)).map(Value::Number)
-    }
-
-    fn visit_u128<E: de::Error>(self, value: u128) -> Result<Value, E> {
-        Number::deserialize(de::value::U128Deserializer::new(value)).map(Value::Number)
-    }
-
-    fn visit_f64<E: de::Error>(self, value: f64) -> Result<Value, E> {
-        Number::from_f64(value)
-            .map(Value::Number)
-            .ok_or_else(|| de::Error::custom("non-finite number"))
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Value, E> {
-        Ok(Value::String(value.to_owned()))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Value, E> {
-        Ok(Value::String(value))
-    }
-
-    fn visit_none<E>(self) -> Result<Value, E> {
-        Ok(Value::Null)
-    }
-
-    fn visit_unit<E>(self) -> Result<Value, E> {
-        Ok(Value::Null)
-    }
-
-    fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
-        Deserialize::deserialize(deserializer).map(|StrictValue(value)| value)
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
-        let mut items = Vec::new();
-        while let Some(StrictValue(item)) = seq.next_element()? {
-            items.push(item);
+impl Finite {
+    fn try_new(value: f64) -> Option<Self> {
+        if !value.is_finite() {
+            return None;
         }
-        Ok(Value::Array(items))
+        // -0 and +0 are one value. A later formatter must not see a sign bit.
+        if value == 0.0 {
+            Some(Self(0.0))
+        } else {
+            Some(Self(value))
+        }
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
-        let mut object = Map::new();
-        while let Some((key, StrictValue(value))) = map.next_entry::<String, StrictValue>()? {
-            if object.contains_key(&key) {
-                return Err(de::Error::custom("duplicate key"));
-            }
-            object.insert(key, value);
-        }
-        Ok(Value::Object(object))
+    fn get(self) -> f64 {
+        self.0
     }
 }
 
-/// Provisional canonical JSON bytes. Not the receipt spec.
-pub fn canonicalize_bytes(input: &[u8]) -> Result<Vec<u8>, Error> {
-    let text = std::str::from_utf8(input).map_err(|_| Error::NotUtf8)?;
-    let StrictValue(value) = serde_json::from_str(text).map_err(|_| Error::InvalidJson)?;
-    serde_json::to_vec(&value).map_err(|_| Error::InvalidJson)
+/// Owned JSON tree. Variants are private. A cycle cannot be represented.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Json {
+    node: Node,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Node {
+    Null,
+    Bool(bool),
+    Number(Finite),
+    String(Wtf16),
+    Array(Vec<Json>),
+    Object(Vec<(Wtf16, Json)>),
+}
+
+impl Json {
+    pub fn null() -> Self {
+        Self { node: Node::Null }
+    }
+
+    pub fn bool(value: bool) -> Self {
+        Self {
+            node: Node::Bool(value),
+        }
+    }
+
+    /// Non-finite input is `type_error`. `-0` is stored as `+0`.
+    pub fn number(value: f64) -> Result<Self, Error> {
+        Finite::try_new(value)
+            .map(|finite| Self {
+                node: Node::Number(finite),
+            })
+            .ok_or(Error::TypeError)
+    }
+
+    pub fn string(units: Wtf16) -> Self {
+        Self {
+            node: Node::String(units),
+        }
+    }
+
+    pub fn array(items: Vec<Json>) -> Self {
+        Self {
+            node: Node::Array(items),
+        }
+    }
+
+    /// Duplicate code-unit keys are `invalid_json`. Entries are stored in canonical key order.
+    pub fn object(mut entries: Vec<(Wtf16, Json)>) -> Result<Self, Error> {
+        entries.sort_by(|left, right| cmp_key(&left.0, &right.0));
+        if entries.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(Error::InvalidJson);
+        }
+        debug_assert!(entries
+            .windows(2)
+            .all(|pair| cmp_key(&pair[0].0, &pair[1].0).is_lt()));
+        Ok(Self {
+            node: Node::Object(entries),
+        })
+    }
+}
+
+/// `depth` counts the container being entered. `128` succeeds and `129` is `too_deep`.
+/// Scalars do not call this.
+pub fn check_depth(depth: usize) -> Result<(), Error> {
+    if depth > MAX_DEPTH {
+        Err(Error::TooDeep)
+    } else {
+        Ok(())
+    }
+}
+
+pub fn canonical_json(input: &[u8]) -> Result<Vec<u8>, Error> {
+    emit::emit(&parse::parse(input)?)
+}
+
+pub fn stable_hash(input: &[u8]) -> Result<String, Error> {
+    Ok(sha256_hex(&canonical_json(input)?))
+}
+
+pub fn canonical_json_value(value: &Json) -> Result<Vec<u8>, Error> {
+    emit::emit(value)
+}
+
+pub fn stable_hash_value(value: &Json) -> Result<String, Error> {
+    Ok(sha256_hex(&canonical_json_value(value)?))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        hex.push(char::from(HEX[usize::from(byte >> 4)]));
+        hex.push(char::from(HEX[usize::from(byte & 0x0F)]));
+    }
+    hex
+}
+
+fn cmp_key(left: &Wtf16, right: &Wtf16) -> Ordering {
+    match (array_index(left.units()), array_index(right.units())) {
+        (Some(left_index), Some(right_index)) => left_index.cmp(&right_index),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => left.units().cmp(right.units()),
+    }
+}
+
+fn array_index(units: &[u16]) -> Option<u32> {
+    if units.is_empty() || units.len() > 10 {
+        return None;
+    }
+    if units.len() > 1 && units[0] == u16::from(b'0') {
+        return None;
+    }
+    let mut value = 0u64;
+    for &unit in units {
+        let digit = ascii_digit(unit)?;
+        value = value * 10 + digit;
+    }
+    // The last canonical array index is 2^32 - 2. 2^32 - 1 stays an ordinary string.
+    if value > u64::from(u32::MAX - 1) {
+        return None;
+    }
+    u32::try_from(value).ok()
+}
+
+fn ascii_digit(unit: u16) -> Option<u64> {
+    if (u16::from(b'0')..=u16::from(b'9')).contains(&unit) {
+        Some(u64::from(unit - u16::from(b'0')))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod invariants {
+    use super::{Finite, Json, Node};
+
+    #[test]
+    fn negative_zero_clears_the_sign_bit() {
+        let Json {
+            node: Node::Number(Finite(number)),
+        } = Json::number(-0.0).unwrap()
+        else {
+            panic!("expected a number");
+        };
+        assert!(number.is_sign_positive());
+    }
 }

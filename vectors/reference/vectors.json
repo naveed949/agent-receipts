@@ -1,0 +1,1602 @@
+{
+  "format": "agent-receipts semantic vectors v0 (draft, unpublished)",
+  "inputEncoding": "Plain JSON. An object of the exact form {\"$js\": T} stands for a value JSON cannot express: T in NaN, Infinity, -Infinity, -0, undefined, bigint:<digits> (native big integer), number:<decimal> (decimal text parsed to an IEEE-754 double).",
+  "generatedBy": "running the reference implementation; not hand-computed",
+  "count": 20,
+  "vectors": [
+    {
+      "name": "canon-key-order-nested",
+      "kind": "canonicalize",
+      "input": {
+        "b": 1,
+        "a": {
+          "d": [
+            3,
+            {
+              "z": true,
+              "y": null
+            }
+          ],
+          "c": "x"
+        },
+        "B": 2,
+        "_": 0
+      },
+      "expected": {
+        "canonical": "{\"B\":2,\"_\":0,\"a\":{\"c\":\"x\",\"d\":[3,{\"y\":null,\"z\":true}]},\"b\":1}",
+        "stableHash": "5588b64560343c75cefb360b90918927a446fa3131288ef20c4ec67aaf4381f0",
+        "canonicalUtf8Hex": "7b2242223a322c225f223a302c2261223a7b2263223a2278222c2264223a5b332c7b2279223a6e756c6c2c227a223a747275657d5d7d2c2262223a317d"
+      },
+      "note": "Keys sorted by UTF-16 code unit order at every depth (uppercase before underscore before lowercase); array order preserved; null kept."
+    },
+    {
+      "name": "canon-integer-like-keys",
+      "kind": "canonicalize",
+      "input": {
+        "2": "two",
+        "10": "ten",
+        "a": "a",
+        "-1": "neg",
+        "01": "zero-one"
+      },
+      "expected": {
+        "canonical": "{\"2\":\"two\",\"10\":\"ten\",\"-1\":\"neg\",\"01\":\"zero-one\",\"a\":\"a\"}",
+        "stableHash": "34057a9edb26bc70dc51792b115401f9a2150db875465cc6bb13cea112d1f1a9",
+        "canonicalUtf8Hex": "7b2232223a2274776f222c223130223a2274656e222c222d31223a226e6567222c223031223a227a65726f2d6f6e65222c2261223a2261227d"
+      },
+      "note": "OBSERVED QUIRK: canonical integer-index keys ('2','10') are emitted first in ascending NUMERIC order, then the rest in code-unit order. '-1' and '01' are not array indices and sort as strings."
+    },
+    {
+      "name": "canon-utf16-vs-codepoint-order",
+      "kind": "canonicalize",
+      "input": {
+        "😀": 1,
+        "￿": 2,
+        "é": 3,
+        "e": 4
+      },
+      "expected": {
+        "canonical": "{\"e\":4,\"é\":3,\"😀\":1,\"￿\":2}",
+        "stableHash": "31d90420ed1e2f3191257ec8e30a7d35123bb4ae9502c6068274330c69947610",
+        "canonicalUtf8Hex": "7b2265223a342c22c3a9223a332c22f09f9880223a312c22efbfbf223a327d"
+      },
+      "note": "Sort compares UTF-16 code units, so U+1F600 (surrogate D83D) sorts BEFORE U+FFFF. A code-point or UTF-8 byte sort would put it after."
+    },
+    {
+      "name": "canon-negative-zero",
+      "kind": "canonicalize",
+      "input": {
+        "a": {
+          "$js": "-0"
+        },
+        "b": [
+          {
+            "$js": "-0"
+          }
+        ]
+      },
+      "expected": {
+        "canonical": "{\"a\":0,\"b\":[0]}",
+        "stableHash": "b65b64664a87e3f600cb996624dbb1916e7be975637862f1770e3a1ff3dffe1a",
+        "canonicalUtf8Hex": "7b2261223a302c2262223a5b305d7d"
+      },
+      "note": "-0 is normalized to 0 at any depth."
+    },
+    {
+      "name": "canon-number-formatting",
+      "kind": "canonicalize",
+      "input": [
+        1,
+        1,
+        0.1,
+        1e+21,
+        1e-7,
+        123456789012345680000,
+        5e-324,
+        1.7976931348623157e+308,
+        -2.5,
+        100
+      ],
+      "expected": {
+        "canonical": "[1,1,0.1,1e+21,1e-7,123456789012345680000,5e-324,1.7976931348623157e+308,-2.5,100]",
+        "stableHash": "f66fc4f4c7013ad05bc63490423539cf99c047ee7674ab3ea5db26bee59f4e4b",
+        "canonicalUtf8Hex": "5b312c312c302e312c31652b32312c31652d372c3132333435363738393031323334353638303030302c35652d3332342c312e37393736393331333438363233313537652b3330382c2d322e352c3130305d"
+      },
+      "note": "Numbers use the ECMAScript Number-to-String shortest round-trip form: 1.0 -> 1, 1e21 -> 1e+21, 1e-7 -> 1e-7, large values below 1e21 written in full."
+    },
+    {
+      "name": "canon-integer-above-2pow53",
+      "kind": "canonicalize",
+      "input": {
+        "exact": {
+          "$js": "number:9007199254740993"
+        },
+        "safeMax": 9007199254740991
+      },
+      "expected": {
+        "canonical": "{\"exact\":9007199254740992,\"safeMax\":9007199254740991}",
+        "stableHash": "b9bd42c7c30b5755ccedac72ae950f0efe2bee73e768d1f3af2d683c5b1ab027",
+        "canonicalUtf8Hex": "7b226578616374223a393030373139393235343734303939322c22736166654d6178223a393030373139393235343734303939317d"
+      },
+      "note": "There is no big-integer type: 9007199254740993 is already rounded to the double 9007199254740992 when parsed, and emitted as that. Precision loss happens before canonicalization."
+    },
+    {
+      "name": "canon-rejections",
+      "kind": "canonicalize",
+      "input": {
+        "cases": {
+          "bigint": {
+            "n": {
+              "$js": "bigint:9007199254740993"
+            }
+          },
+          "nan": {
+            "n": {
+              "$js": "NaN"
+            }
+          },
+          "infinityInArray": [
+            {
+              "$js": "Infinity"
+            }
+          ],
+          "negInfinity": {
+            "$js": "-Infinity"
+          },
+          "undefinedField": {
+            "present": 1,
+            "missing": {
+              "$js": "undefined"
+            }
+          },
+          "undefinedInArray": [
+            1,
+            {
+              "$js": "undefined"
+            }
+          ],
+          "undefinedTopLevel": {
+            "$js": "undefined"
+          }
+        }
+      },
+      "expectedError": {
+        "bigint": {
+          "type": "TypeError",
+          "message": "unsupported canonical value: bigint"
+        },
+        "nan": {
+          "type": "TypeError",
+          "message": "canonical values must contain finite numbers"
+        },
+        "infinityInArray": {
+          "type": "TypeError",
+          "message": "canonical values must contain finite numbers"
+        },
+        "negInfinity": {
+          "type": "TypeError",
+          "message": "canonical values must contain finite numbers"
+        },
+        "undefinedField": {
+          "type": "TypeError",
+          "message": "canonical values cannot contain undefined"
+        },
+        "undefinedInArray": {
+          "type": "TypeError",
+          "message": "unsupported canonical value: undefined"
+        },
+        "undefinedTopLevel": {
+          "type": "TypeError",
+          "message": "unsupported canonical value: undefined"
+        }
+      },
+      "note": "Every case throws (TypeError). Native big integers, NaN, +/-Infinity are rejected anywhere. undefined is rejected as an object field value, as an array element, and at top level; it is NOT silently dropped. A field that is simply absent is fine."
+    },
+    {
+      "name": "canon-string-escaping",
+      "kind": "canonicalize",
+      "input": {
+        "s": "quote\" backslash\\ slash/ nl\n tab\t cr\r bs\b ff\f nul\u0000 us\u001f del eé ls  emoji😀 lone\ud800"
+      },
+      "expected": {
+        "canonical": "{\"s\":\"quote\\\" backslash\\\\ slash/ nl\\n tab\\t cr\\r bs\\b ff\\f nul\\u0000 us\\u001f del eé ls  emoji😀 lone\\ud800\"}",
+        "stableHash": "59aefac441f43a4f75efcdcf81d75d7a613811dfb10b6b0f759f0a78b9b15e5a",
+        "canonicalUtf8Hex": "7b2273223a2271756f74655c22206261636b736c6173685c5c20736c6173682f206e6c5c6e207461625c742063725c722062735c622066665c66206e756c5c75303030302075735c75303031662064656c7f2065c3a9206c73e280a820656d6f6a69f09f9880206c6f6e655c7564383030227d"
+      },
+      "note": "JSON.stringify escaping: \\\" \\\\ \\b \\f \\n \\r \\t; other C0 controls as lowercase \\u00XX; '/' DEL, non-ASCII, U+2028 emitted raw (UTF-8); lone surrogates escaped as \\udXXX."
+    },
+    {
+      "name": "hmac-controlled-sign-and-verify",
+      "kind": "controlled-integrity",
+      "input": {
+        "signingKeyUtf8": "synthetic-controlled-key-0001",
+        "keyId": "synthetic-key-1",
+        "value": {
+          "b": [
+            1,
+            2
+          ],
+          "a": "x"
+        },
+        "verifyCases": {
+          "valid": {
+            "integrityVersion": "controlled-integrity/v1",
+            "integrityKeyId": "synthetic-key-1",
+            "integrityDigest": "acccb6932644f91306b14c6b012149321e0abb5b204f4fa4e61b15a8640dd69e"
+          },
+          "uppercaseDigest": {
+            "integrityVersion": "controlled-integrity/v1",
+            "integrityKeyId": "synthetic-key-1",
+            "integrityDigest": "ACCCB6932644F91306B14C6B012149321E0ABB5B204F4FA4E61B15A8640DD69E"
+          },
+          "wrongKeyId": {
+            "integrityVersion": "controlled-integrity/v1",
+            "integrityKeyId": "synthetic-key-2",
+            "integrityDigest": "acccb6932644f91306b14c6b012149321e0abb5b204f4fa4e61b15a8640dd69e"
+          },
+          "tamperedValue": "value with a: 'y'"
+        }
+      },
+      "expected": {
+        "sign": {
+          "evidence": {
+            "integrityVersion": "controlled-integrity/v1",
+            "integrityKeyId": "synthetic-key-1",
+            "integrityDigest": "acccb6932644f91306b14c6b012149321e0abb5b204f4fa4e61b15a8640dd69e"
+          },
+          "macInputUtf8": "{\"a\":\"x\",\"b\":[1,2]}",
+          "crossCheckManualHmacMatches": true
+        },
+        "verify": {
+          "valid": true,
+          "uppercaseDigest": false,
+          "wrongKeyId": false,
+          "tamperedValue": false
+        }
+      },
+      "note": "digest = lowercase hex HMAC-SHA256(key bytes, UTF-8 of canonical JSON of value). Key string is UTF-8 encoded. Verify returns boolean, never throws: requires exact version tag, matching keyId, digest matching ^[0-9a-f]{64}$ (lowercase only), then constant-time compare."
+    },
+    {
+      "name": "hmac-audit-receipt-valid",
+      "kind": "audit.verifyAuditReceipt",
+      "input": {
+        "signingKeyUtf8": "synthetic-audit-key-0123456789ab",
+        "receipt": {
+          "id": "6a335060-6a40-4ff0-a951-bd29202bb694",
+          "version": "adaptive-sandbox.audit-receipt/v1",
+          "recordedAt": "2026-11-03T21:55:49.639Z",
+          "tool": "file.write",
+          "outcome": "denied",
+          "decision": "AUTHORITY_DENIED",
+          "requestHash": "1e56e1ae43c9b7b354224c561fb815696fa0c6595f685718d9c3bc0c6ce464e7",
+          "executionDigest": "786696dbc3bded0a5dae8e1e4ce0ec35079c01729dbe6bab9f4e0319be5063d9",
+          "artifacts": {
+            "policy": {
+              "version": "p1",
+              "hash": "e3611077723c7854aaa148ae09304e669230b0e6db25e3d5aef612a7d134c038",
+              "value": {
+                "agent": {},
+                "outer": {},
+                "session": {},
+                "state": {}
+              }
+            },
+            "contract": {
+              "version": "2",
+              "hash": "6eef0c82d64acb86ac8eedf66b3d52445f8354f8c3b46a1f4e29783d19249820",
+              "value": {
+                "name": "file.write",
+                "requiredCapabilities": [
+                  "filesystem:write"
+                ],
+                "version": "2"
+              }
+            },
+            "request": {
+              "version": "r1",
+              "hash": "0d9518a9e8d70204f2fbda1cfe7e374965c1595198e1004a0a57becf84d7b16f",
+              "value": {
+                "agent": {
+                  "capabilities": [
+                    "filesystem:write"
+                  ],
+                  "id": "agent-1"
+                },
+                "args": {
+                  "content": {
+                    "redacted": true,
+                    "hash": "0d8c177b80619451969d14432e463ed24aa2d3a5f39cdd85c6b79afa8a5d602c"
+                  },
+                  "path": "docs/example.txt"
+                },
+                "session": {
+                  "capabilities": [
+                    "filesystem:write"
+                  ],
+                  "id": "session-1"
+                },
+                "tool": "file.write"
+              }
+            },
+            "plan": {
+              "version": "pl1",
+              "hash": "d89636da05f50268bda4dd3e50232fbd53f38478c44666636387fe5f5d3c1516",
+              "value": {
+                "args": {
+                  "content": {
+                    "redacted": true,
+                    "hash": "0d8c177b80619451969d14432e463ed24aa2d3a5f39cdd85c6b79afa8a5d602c"
+                  },
+                  "path": "docs/example.txt"
+                },
+                "effectiveCapabilities": [
+                  "filesystem:write"
+                ],
+                "rejection": {
+                  "reason": "tool has no authority contract"
+                },
+                "validated": true
+              }
+            },
+            "backend": {
+              "version": "b1",
+              "hash": "188b0e4be5a48b47778e27d8bbfe6df1ed0b59ac326abdf79c295facc48bf8da",
+              "value": {
+                "keyPersistence": "injected",
+                "name": "synthetic-backend"
+              }
+            }
+          },
+          "authority": {
+            "declared": {
+              "capabilities": [
+                "filesystem:write"
+              ]
+            },
+            "requested": {
+              "capabilities": [
+                "filesystem:write"
+              ],
+              "resources": [
+                "docs/example.txt"
+              ]
+            },
+            "granted": {
+              "created": false,
+              "capabilities": []
+            },
+            "attemptedDenied": [],
+            "observed": []
+          },
+          "integrity": {
+            "algorithm": "hmac-sha256",
+            "keyId": "synthetic-key-a",
+            "signature": "f370cbd6d98b3e246af38ee32c4451e8a1e00169a11d24b799c2740963801ccd"
+          }
+        }
+      },
+      "expected": {
+        "result": true,
+        "macInputAscii": "e74a67215cb3f20bcda77053b658e10e67a3ece2d9ee7b0841b88761567a2596",
+        "macInputIsSha256HexOfCanonicalUnsigned": true,
+        "crossCheckManualSignatureMatches": true
+      },
+      "note": "Receipt issued by the real gateway (denied: tool has no authority contract). signature = lowercase hex HMAC-SHA256(key, ASCII bytes of the 64-char lowercase hex SHA-256 of canonical JSON of the receipt minus its 'integrity' field). Note the double hash."
+    },
+    {
+      "name": "hmac-audit-receipt-failures",
+      "kind": "audit.verifyAuditReceipt",
+      "input": {
+        "signingKeyUtf8": "synthetic-audit-key-0123456789ab",
+        "base": "receipt from hmac-audit-receipt-valid",
+        "cases": {
+          "tamperedOutcome": "outcome changed to 'allowed', signature unchanged",
+          "wrongKey": "verified with 'synthetic-audit-key-WRONG-0000000'",
+          "uppercaseSignature": "signature hex uppercased",
+          "v2DiscriminatorResigned": "authorityPolicyVersion='2' added and receipt correctly re-signed",
+          "nullReceipt": "null",
+          "missingIntegrity": "integrity field removed"
+        }
+      },
+      "expected": {
+        "tamperedOutcome": false,
+        "wrongKey": false,
+        "uppercaseSignature": false,
+        "v2DiscriminatorResigned": false,
+        "nullReceipt": false,
+        "missingIntegrity": false
+      },
+      "note": "verifyAuditReceipt returns a boolean and never throws. A receipt that carries the v2 discriminator but not a complete v2 authority chain fails even when correctly re-signed: signature validity is necessary, not sufficient."
+    },
+    {
+      "name": "hmac-key-encoding-and-length",
+      "kind": "audit.verifyAuditReceipt",
+      "input": {
+        "cases": {
+          "keyAsUtf8Bytes": "same key supplied as bytes (Uint8Array of UTF-8)",
+          "fiveCharKey": "receipt re-signed with key 'short' and verified with 'short'",
+          "runtimeRejectsShortKey": "issue-side runtime with key 'short'",
+          "runtimeEightNonAsciiChars": "issue-side runtime with 8 x U+00E9 (16 UTF-8 bytes)",
+          "controlledEightNonAsciiChars": "controlled-integrity runtime with 8 x U+00E9",
+          "controlledFifteenByteKey": "controlled-integrity runtime with 15-byte ASCII key"
+        }
+      },
+      "expected": {
+        "keyAsUtf8Bytes": true,
+        "fiveCharKey": true,
+        "runtimeRejectsShortKey": {
+          "ok": false,
+          "error": {
+            "type": "TypeError",
+            "message": "audit signingKey must contain at least 16 bytes"
+          }
+        },
+        "runtimeEightNonAsciiChars": {
+          "ok": false,
+          "error": {
+            "type": "TypeError",
+            "message": "audit signingKey must contain at least 16 bytes"
+          }
+        },
+        "controlledEightNonAsciiChars": {
+          "ok": true,
+          "value": true
+        },
+        "controlledFifteenByteKey": {
+          "ok": false,
+          "error": {
+            "type": "RangeError",
+            "message": "controlled integrity signing key must contain at least 16 bytes"
+          }
+        }
+      },
+      "note": "String keys are UTF-8 encoded; bytes and the equivalent string are interchangeable. The verifier enforces NO minimum key length; the issuing runtime requires length >= 16 measured in UTF-16 code units for strings (bytes for byte arrays), so 8 non-ASCII chars (16 UTF-8 bytes) is rejected there, unlike controlled-integrity, which measures UTF-8 bytes."
+    },
+    {
+      "name": "linkage-version-rules",
+      "kind": "audit.verifyAuditReceipt",
+      "input": {
+        "signingKeyUtf8": "synthetic-linkage-key-0123456789",
+        "v2AllowedReceipt": {
+          "id": "3e2d52a8-b48d-4edd-842f-bcc340ef2ab8",
+          "version": "adaptive-sandbox.audit-receipt/v2",
+          "authorityPolicyVersion": "2",
+          "recordedAt": "2026-11-04T06:31:14.483Z",
+          "tool": "https.example",
+          "outcome": "allowed",
+          "decision": "ALLOWED",
+          "requestHash": "947a8c33b7b7c8ef1c1c099011848a7f7b42230e2b8953a9475658ed522c3ce4",
+          "executionDigest": "e0e15eb783a3040642bc70266615a671e55eb78f06a0ce937f76a1bb73af9f9b",
+          "artifacts": {
+            "policy": {
+              "version": "2",
+              "hash": "55cd2e691c412a07a4bce27e53d4cbf22a0b2f7a320a6e2219dbce9d417cd83a",
+              "value": {
+                "agent": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "outer": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "session": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "state": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                }
+              }
+            },
+            "contract": {
+              "version": "1",
+              "hash": "6f8620a83295e3d0091270ff5ff7aef3f92877a762526f8dd824303f56166c22",
+              "value": {
+                "authority": {
+                  "allowDegraded": [
+                    "network.https"
+                  ],
+                  "grants": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "required": [
+                    "network.https"
+                  ]
+                },
+                "name": "https.example",
+                "requiredCapabilities": [
+                  "https"
+                ],
+                "version": "1"
+              }
+            },
+            "request": {
+              "version": "1",
+              "hash": "947a8c33b7b7c8ef1c1c099011848a7f7b42230e2b8953a9475658ed522c3ce4",
+              "value": {
+                "agent": {
+                  "authority": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "capabilities": [
+                    "https"
+                  ],
+                  "id": "agent-1"
+                },
+                "args": {},
+                "session": {
+                  "authority": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "capabilities": [
+                    "https"
+                  ],
+                  "id": "session-1"
+                },
+                "tool": "https.example"
+              }
+            },
+            "plan": {
+              "version": "1",
+              "hash": "f58d28f4211ceceb19e8e138778f173bb76a8fb3d54cf3416b1393a4045ab1ef",
+              "value": {
+                "args": {},
+                "argumentAuthority": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "authority": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "authorityHash": "40dffe0e3958f91d0f37c298e9ab2779a8510c5e2f8fe355337df5be8ab4d470",
+                "effectiveCapabilities": [
+                  "https"
+                ],
+                "validated": true
+              }
+            },
+            "backend": {
+              "version": "1",
+              "hash": "39687ed6cf70284a7da6c7322f62b79d751a744a1ad8d6ea65431a79a18d4405",
+              "value": {
+                "authority": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "authorityPolicyVersion": "2",
+                "keyPersistence": "injected",
+                "name": "synthetic-meta"
+              }
+            }
+          },
+          "authority": {
+            "declared": {
+              "capabilities": [
+                "https"
+              ],
+              "authority": {
+                "allowDegraded": [
+                  "network.https"
+                ],
+                "grants": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "required": [
+                  "network.https"
+                ]
+              }
+            },
+            "requested": {
+              "capabilities": [
+                "https"
+              ],
+              "resources": [],
+              "authority": {
+                "agent": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "session": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                }
+              }
+            },
+            "granted": {
+              "created": true,
+              "capabilities": [
+                "https"
+              ],
+              "authority": {
+                "network": {
+                  "https": [
+                    {
+                      "host": "api.example.com",
+                      "maxResponseBytes": 1024,
+                      "methods": [
+                        "GET"
+                      ],
+                      "port": 443,
+                      "protocol": "https",
+                      "redirects": "none",
+                      "resolution": "public-only",
+                      "timeoutMs": 1000
+                    }
+                  ]
+                },
+                "version": "2"
+              }
+            },
+            "attemptedDenied": [],
+            "observed": []
+          },
+          "integrity": {
+            "algorithm": "hmac-sha256",
+            "keyId": "synthetic-key-l",
+            "signature": "4f5bcd19c3d196447904b8cd317e469b2e96bf46c80a06700add7940d17a7a28"
+          }
+        },
+        "v2DeniedReceipt": {
+          "id": "1b140775-ffc3-47f0-a63b-af2b26729e39",
+          "version": "adaptive-sandbox.audit-receipt/v2",
+          "authorityPolicyVersion": "2",
+          "recordedAt": "2026-11-04T06:31:14.503Z",
+          "tool": "https.example",
+          "outcome": "denied",
+          "decision": "AUTHORITY_DENIED",
+          "requestHash": "947a8c33b7b7c8ef1c1c099011848a7f7b42230e2b8953a9475658ed522c3ce4",
+          "executionDigest": "edd1231cb0355928733caf007005813889c1636bdcde2d16ad461512a28679fb",
+          "artifacts": {
+            "policy": {
+              "version": "2",
+              "hash": "6567379183718e090b5c706c3b0e35f78ca18e8c43c99a8bbd18982d932eb13a",
+              "value": {
+                "agent": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "outer": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "session": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "state": {
+                  "version": "2"
+                }
+              }
+            },
+            "contract": {
+              "version": "1",
+              "hash": "6f8620a83295e3d0091270ff5ff7aef3f92877a762526f8dd824303f56166c22",
+              "value": {
+                "authority": {
+                  "allowDegraded": [
+                    "network.https"
+                  ],
+                  "grants": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "required": [
+                    "network.https"
+                  ]
+                },
+                "name": "https.example",
+                "requiredCapabilities": [
+                  "https"
+                ],
+                "version": "1"
+              }
+            },
+            "request": {
+              "version": "1",
+              "hash": "947a8c33b7b7c8ef1c1c099011848a7f7b42230e2b8953a9475658ed522c3ce4",
+              "value": {
+                "agent": {
+                  "authority": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "capabilities": [
+                    "https"
+                  ],
+                  "id": "agent-1"
+                },
+                "args": {},
+                "session": {
+                  "authority": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "capabilities": [
+                    "https"
+                  ],
+                  "id": "session-1"
+                },
+                "tool": "https.example"
+              }
+            },
+            "plan": {
+              "version": "1",
+              "hash": "eefb7c77ff2d285dbc4b1fe6c6ee53dd2713dc8d899f6252b522fe0bea991b4c",
+              "value": {
+                "args": {},
+                "argumentAuthority": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "authority": {
+                  "version": "2"
+                },
+                "authorityHash": "77da9a7ed3026aba89bb78dac4b72501c10b9ae1f0689d3c4b31e27c3667940d",
+                "effectiveCapabilities": [
+                  "https"
+                ],
+                "rejection": {
+                  "empty": [
+                    "network.https"
+                  ],
+                  "reason": "required authority is empty"
+                },
+                "validated": true
+              }
+            },
+            "backend": {
+              "version": "1",
+              "hash": "39687ed6cf70284a7da6c7322f62b79d751a744a1ad8d6ea65431a79a18d4405",
+              "value": {
+                "authority": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "authorityPolicyVersion": "2",
+                "keyPersistence": "injected",
+                "name": "synthetic-meta"
+              }
+            }
+          },
+          "authority": {
+            "declared": {
+              "capabilities": [
+                "https"
+              ],
+              "authority": {
+                "allowDegraded": [
+                  "network.https"
+                ],
+                "grants": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "required": [
+                  "network.https"
+                ]
+              }
+            },
+            "requested": {
+              "capabilities": [
+                "https"
+              ],
+              "resources": [],
+              "authority": {
+                "agent": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                },
+                "session": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                }
+              }
+            },
+            "granted": {
+              "created": false,
+              "capabilities": []
+            },
+            "attemptedDenied": [],
+            "observed": []
+          },
+          "integrity": {
+            "algorithm": "hmac-sha256",
+            "keyId": "synthetic-key-l",
+            "signature": "fbe871ef2819dc8490a71d90f0e1ce3e099e57969a68331a173c8305471611da"
+          }
+        },
+        "v1ReceiptRef": "input.receipt of hmac-audit-receipt-valid (same key as that vector)",
+        "mutationMethod": "Apply the named change, recompute artifacts.<name>.hash = stableHash(value) for any artifact whose value changed, then re-sign correctly. Every case therefore has a valid signature; only version linkage decides."
+      },
+      "expected": {
+        "v2AllowedReceipt": true,
+        "v2DeniedReceipt": true,
+        "v2Mutations": {
+          "resignedUnchanged_control": true,
+          "versionTagV1WithMarker2": false,
+          "markerRemovedV2Tag": false,
+          "marker3": false,
+          "policyArtifactVersionLabel1": false,
+          "planEnvelopeVersion1": false,
+          "planAuthorityHashUppercase": false,
+          "artifactHashMismatch": false,
+          "argumentAuthorityVersion1": false,
+          "backendMarker1": false,
+          "backendAuthorityVersion1": false,
+          "policyLayer_outer_version1": false,
+          "policyLayer_agent_version1": false,
+          "policyLayer_session_version1": false,
+          "policyLayer_state_version1": false,
+          "contractGrantsVersion1": false,
+          "requestAgentAuthorityVersion1": false,
+          "requestSessionAuthorityVersion1": false,
+          "grantedDiffersFromEnvelope": false,
+          "grantedRemoved": true
+        },
+        "v1Mutations": {
+          "resignedUnchanged_control": true,
+          "versionTagV2NoMarker": false,
+          "planEnvelopeVersion2": false,
+          "planEnvelopeVersion1Explicit": true,
+          "grantedVersion2": false
+        }
+      },
+      "note": "Version linkage is checked after the signature. Both v2 receipts were issued by the reference with all authority layers at v2 (the denied one has no granted authority). Each mutation breaks exactly one linkage rule."
+    },
+    {
+      "name": "cmp-v1-widening",
+      "kind": "compareAuthorityContracts",
+      "input": {
+        "previous": {
+          "filesystem": {
+            "read": [
+              "docs/a"
+            ],
+            "write": [
+              "docs/a"
+            ]
+          }
+        },
+        "next": {
+          "filesystem": {
+            "read": [
+              "docs/a",
+              "docs/b"
+            ],
+            "write": [
+              "docs/a"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "relationship": "widening",
+        "widened": [
+          "filesystem.read"
+        ],
+        "narrowed": []
+      },
+      "note": "Added scope entry -> widened."
+    },
+    {
+      "name": "cmp-v1-mixed-and-order",
+      "kind": "compareAuthorityContracts",
+      "input": {
+        "previous": {
+          "filesystem": {
+            "write": [
+              "x"
+            ]
+          },
+          "git": {
+            "hooks": [
+              "h"
+            ]
+          },
+          "output": {
+            "unrestricted": false
+          }
+        },
+        "next": {
+          "container": {
+            "socket": true
+          },
+          "filesystem": {
+            "read": "any"
+          },
+          "git": {
+            "hooks": []
+          }
+        }
+      },
+      "expected": {
+        "relationship": "mixed",
+        "widened": [
+          "filesystem.read",
+          "container.socket"
+        ],
+        "narrowed": [
+          "filesystem.write",
+          "git.hooks"
+        ]
+      },
+      "note": "Lists follow a fixed path order (filesystem.read, filesystem.sensitiveRead, filesystem.write, network.outbound, network.https, git.write, git.hooks, environment.secrets, environment.ambientSecrets, output.unrestricted, container.socket), not input or alphabetical order. 'any' beats any list; boolean true counts as a grant, false as none."
+    },
+    {
+      "name": "cmp-v1-unchanged-normalization",
+      "kind": "compareAuthorityContracts",
+      "input": {
+        "previous": {
+          "filesystem": {
+            "read": [
+              "b",
+              "a",
+              "a"
+            ],
+            "write": []
+          },
+          "output": {
+            "unrestricted": false
+          }
+        },
+        "next": {
+          "filesystem": {
+            "read": [
+              "a",
+              "b"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "relationship": "unchanged",
+        "widened": [],
+        "narrowed": []
+      },
+      "note": "Duplicates/order ignored; empty list, false, and absent are all equivalent to no grant."
+    },
+    {
+      "name": "cmp-any-to-list",
+      "kind": "compareAuthorityContracts",
+      "input": {
+        "previous": {
+          "environment": {
+            "secrets": "any"
+          }
+        },
+        "next": {
+          "environment": {
+            "secrets": [
+              "API_KEY"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "relationship": "narrowing",
+        "widened": [],
+        "narrowed": [
+          "environment.secrets"
+        ]
+      },
+      "note": "'any' -> list is narrowing; list -> 'any' would be widening."
+    },
+    {
+      "name": "cmp-v2-https-split-vs-merged",
+      "kind": "compareAuthorityContracts",
+      "input": {
+        "previous": {
+          "version": "2",
+          "network": {
+            "https": [
+              {
+                "protocol": "https",
+                "host": "api.example.com",
+                "port": 443,
+                "methods": [
+                  "GET"
+                ],
+                "resolution": "public-only",
+                "redirects": "none",
+                "maxResponseBytes": 1024,
+                "timeoutMs": 1000
+              },
+              {
+                "protocol": "https",
+                "host": "api.example.com",
+                "port": 443,
+                "methods": [
+                  "HEAD"
+                ],
+                "resolution": "public-only",
+                "redirects": "none",
+                "maxResponseBytes": 1024,
+                "timeoutMs": 1000
+              }
+            ]
+          }
+        },
+        "next": {
+          "version": "2",
+          "network": {
+            "https": [
+              {
+                "protocol": "https",
+                "host": "API.example.com",
+                "port": 443,
+                "methods": [
+                  "HEAD",
+                  "GET"
+                ],
+                "resolution": "public-only",
+                "redirects": "none",
+                "maxResponseBytes": 1024,
+                "timeoutMs": 1000
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "relationship": "unchanged",
+        "widened": [],
+        "narrowed": []
+      },
+      "note": "HTTPS rules compare by per-method coverage with bounds, so split and merged rule sets are equal; host case-folded."
+    },
+    {
+      "name": "cmp-v2-https-bounds-mixed",
+      "kind": "compareAuthorityContracts",
+      "input": {
+        "previous": {
+          "version": "2",
+          "network": {
+            "https": [
+              {
+                "protocol": "https",
+                "host": "api.example.com",
+                "port": 443,
+                "methods": [
+                  "GET"
+                ],
+                "resolution": "public-only",
+                "redirects": "none",
+                "maxResponseBytes": 1024,
+                "timeoutMs": 1000
+              }
+            ]
+          }
+        },
+        "next": {
+          "version": "2",
+          "network": {
+            "https": [
+              {
+                "protocol": "https",
+                "host": "api.example.com",
+                "port": 443,
+                "methods": [
+                  "GET"
+                ],
+                "resolution": "public-only",
+                "redirects": "none",
+                "maxResponseBytes": 2048,
+                "timeoutMs": 500
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "relationship": "mixed",
+        "widened": [
+          "network.https"
+        ],
+        "narrowed": [
+          "network.https"
+        ]
+      },
+      "note": "Raising one bound and lowering another on the same origin/method: neither side is a subset -> network.https in both lists -> mixed."
+    },
+    {
+      "name": "cmp-rejections",
+      "kind": "compareAuthorityContracts",
+      "input": {
+        "cases": {
+          "crossVersion": {
+            "previous": {},
+            "next": {
+              "version": "2"
+            }
+          },
+          "unknownField": {
+            "previous": {
+              "filesystem": {
+                "read": []
+              }
+            },
+            "next": {
+              "filesystem": {
+                "read": [],
+                "exec": [
+                  "x"
+                ]
+              }
+            }
+          },
+          "httpsInV1": {
+            "previous": {},
+            "next": {
+              "network": {
+                "https": []
+              }
+            }
+          },
+          "outboundInV2": {
+            "previous": {
+              "version": "2"
+            },
+            "next": {
+              "version": "2",
+              "network": {
+                "outbound": "any"
+              }
+            }
+          },
+          "badVersion": {
+            "previous": {
+              "version": "3"
+            },
+            "next": {
+              "version": "3"
+            }
+          },
+          "nonIdentifierScope": {
+            "previous": {
+              "git": {
+                "write": [
+                  " padded"
+                ]
+              }
+            },
+            "next": {}
+          },
+          "nonBooleanFlag": {
+            "previous": {
+              "output": {
+                "unrestricted": "yes"
+              }
+            },
+            "next": {}
+          },
+          "badHttpsHost": {
+            "previous": {
+              "version": "2",
+              "network": {
+                "https": [
+                  {
+                    "protocol": "https",
+                    "host": "127.0.0.1",
+                    "port": 443,
+                    "methods": [
+                      "GET"
+                    ],
+                    "resolution": "public-only",
+                    "redirects": "none",
+                    "maxResponseBytes": 1024,
+                    "timeoutMs": 1000
+                  }
+                ]
+              }
+            },
+            "next": {
+              "version": "2"
+            }
+          }
+        }
+      },
+      "expectedError": {
+        "crossVersion": {
+          "type": "TypeError",
+          "message": "cannot compare different authority policy versions"
+        },
+        "unknownField": {
+          "type": "TypeError",
+          "message": "filesystem contains unknown authority fields: exec"
+        },
+        "httpsInV1": {
+          "type": "TypeError",
+          "message": "network contains unknown authority fields: https"
+        },
+        "outboundInV2": {
+          "type": "TypeError",
+          "message": "network contains unknown authority fields: outbound"
+        },
+        "badVersion": {
+          "type": "TypeError",
+          "message": "unsupported authority policy version"
+        },
+        "nonIdentifierScope": {
+          "type": "TypeError",
+          "message": "git.write must be \"any\" or an identifier array"
+        },
+        "nonBooleanFlag": {
+          "type": "TypeError",
+          "message": "output.unrestricted must be boolean"
+        },
+        "badHttpsHost": {
+          "type": "TypeError",
+          "message": "unsupported or ambiguous HTTPS host"
+        }
+      },
+      "note": "Both inputs are fully normalized (validated) before comparison; any invalid input throws a TypeError. Messages are informative, not a stable contract."
+    }
+  ]
+}
