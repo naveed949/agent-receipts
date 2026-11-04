@@ -1,6 +1,6 @@
 ---
 name: verify-agent-receipts
-description: "Use when verifying agent-receipts on a local checkout, before a push, after changing canonicalize_bytes or its Python or Node bindings, after changing files under vectors/canonicalize, or when fmt, clippy, cargo test, maturin, pytest, or napi results are in doubt."
+description: "Use when verifying agent-receipts on a local checkout, before a push, after changing canonical_json, stable_hash, or their Python or Node bindings, after changing files under vectors/reference or vectors/text, or when fmt, clippy, cargo test, maturin, pytest, or napi results are in doubt."
 ---
 
 # Verify agent-receipts
@@ -64,10 +64,10 @@ The script drives every surface that exists on this checkout:
 | --- | --- |
 | `rustfmt` | `cargo fmt --all --check` |
 | `clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
-| `cargo-test` | `cargo test --workspace` (includes `crates/core/tests/vectors.rs` over `vectors/canonicalize`) |
+| `cargo-test` | `cargo test --workspace` (includes `crates/core/tests/vectors.rs` over `vectors/text` and the reference runner) |
 | `python-abi3` | `maturin build --release --manifest-path bindings/python/Cargo.toml --interpreter python3`, install the single `*cp39-abi3*.whl`, then `python3 -m pytest bindings/python/tests` |
 | `node-napi` | in `bindings/node`: `npm ci`, `npm run build`, `npm test` |
-| `cross-language-agreement` | dump `canonicalize_bytes` from Rust, Python, and Node on every file in `vectors/canonicalize` and require equal bytes or equal error codes |
+| `cross-language-agreement` | compare Rust, Python, and Node on every reference success row (`canonicalUtf8Hex` and `stableHash`), and compare Rust and Python on every `vectors/text` file |
 
 It then records reserved names from `docs/DECISIONS.md` that have no API yet:
 
@@ -75,8 +75,9 @@ It then records reserved names from `docs/DECISIONS.md` that have no API yet:
 - `authority-contract-comparison`
 - `async-streaming-verifier`
 - `benchmarks`
+- `reference-pending-kinds`
 
-Those rows are `NOT_IMPLEMENTED` when source under `crates/core/src` and the bindings has no matching API. If that API appears, the row is `FAIL` (stale skill), never `PASS`.
+Those rows are `NOT_IMPLEMENTED` when source under `crates/core/src` and the bindings has no matching API. If that API appears, the row is `FAIL` (stale skill), never `PASS`. Canonicalization stays `PASS`. Pending reference kinds stay `NOT_IMPLEMENTED`.
 
 Drive each mapped feature through this script. The feature file names the surface id and the log to read. Do not mark a feature passed because a different surface passed.
 
@@ -84,11 +85,11 @@ Drive each mapped feature through this script. The feature file names the surfac
 
 Logs live in `$VERIFY_EVIDENCE_DIR` when set, else `/tmp/agent-receipts-verify-<timestamp>-<pid>/`.
 
-Proof for an existing surface is the command log plus a `PASS` or `FAIL` line. Proof for agreement is per-vector `ok` lines in `cross-language-agreement.log` for every `vectors/canonicalize/*.json` file. Proof for a reserved feature is a `NOT_IMPLEMENTED` line, not a skipped `PASS`.
+Proof for an existing surface is the command log plus a `PASS` or `FAIL` line. Proof for agreement is `reference <name> rust-python-node ok` for each success row, `reference <name> python-node type_error` for the rejection row, `text <name> rust-python ok` for every file in `vectors/text`, then `pending 12`, `reference 8 ok`, and `text` with a count equal to the number of text files. Proof for a reserved feature is a `NOT_IMPLEMENTED` line, not a skipped `PASS`.
 
 `summary.txt` and `summary.tsv` in the evidence directory are the pass/fail table. Keep them. Cleanup must not delete that directory.
 
-Exercise the real `cargo`, wheel, and napi paths. Do not call `canonicalize_bytes` through a test-only stub. Do not treat `cargo check` as `cargo test`.
+Exercise the real `cargo`, wheel, and napi paths. Do not call `canonical_json` through a test-only stub. Do not treat `cargo check` as `cargo test`.
 
 ## Cleanup
 

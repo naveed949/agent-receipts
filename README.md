@@ -11,7 +11,7 @@ From the repository root, run this command.
 cargo test --workspace
 ```
 
-`cargo test -p agent-receipts` runs the cases in `vectors/canonicalize`.
+`cargo test -p agent-receipts` runs the reference vectors and the cases in `vectors/text`.
 
 ## Test the Python binding
 
@@ -45,4 +45,4 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-If you need the current JSON rules, read [Decisions](docs/DECISIONS.md).
+The entry points are `canonical_json` and `stable_hash` in Rust and Python, and `canonicalJson` and `stableHash` in Node. The behavior is [Canonical JSON](docs/spec/canonical-json.md). The reasons for the format are in [Decisions](docs/DECISIONS.md).

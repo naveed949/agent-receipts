@@ -1,6 +1,6 @@
 # Async streaming verifier
 
-An async streaming verifier is not part of this checkout. The core library exposes a synchronous `canonicalize_bytes` function.
+An async streaming verifier is not part of this checkout. `canonical_json` and `stable_hash` are synchronous and return one whole result.
 
 ## Sub-features
 
@@ -22,5 +22,5 @@ Preconditions:
 
 ## Gotchas
 
-- A blocking canonicalize of a whole buffer is not streaming verification.
-- Do not mark this passed because `canonicalize_bytes` is fast.
+- A blocking canonicalize of a whole value is not streaming verification.
+- Do not mark this passed because `canonical_json` returned.
