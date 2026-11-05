@@ -15,6 +15,31 @@ fn reference_vectors() {
     }
 }
 
+#[test]
+fn gondolin_https_is_v1_only() {
+    if let Err(err) = check_gondolin_https() {
+        panic!("{err}");
+    }
+}
+
+fn check_gondolin_https() -> Result<(), String> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vectors/reference");
+    let bytes = fs::read(dir.join("vectors.json")).map_err(|err| format!("read: {err}"))?;
+    let root = parse(&bytes).map_err(|err| format!("parse {}", err.code()))?;
+    let catalog = Catalog::load(expect_array(field(&root, "vectors")?)?)?;
+    let marked_v1 = set_field(&catalog.v1_receipt, "gondolinHttps", Json::bool(true))?;
+    let resigned_v1 = resign(&marked_v1, &catalog.v1_key)?;
+    if verify_audit_receipt(&resigned_v1, &catalog.v1_key) {
+        return Err("v1 gondolinHttps resigned to true".into());
+    }
+    let marked_v2 = set_field(&catalog.v2_allowed, "gondolinHttps", Json::bool(true))?;
+    let resigned_v2 = resign(&marked_v2, &catalog.v2_key)?;
+    if !verify_audit_receipt(&resigned_v2, &catalog.v2_key) {
+        return Err("v2 gondolinHttps resigned to false".into());
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vectors/reference");
     let allow = read_allowlist(&dir.join("pending-kinds.txt"))?;

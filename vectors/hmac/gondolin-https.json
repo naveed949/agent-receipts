@@ -1,0 +1,13 @@
+{
+  "name": "gondolin-https-v1-ban",
+  "note": "A correctly resigned v1 receipt that carries top-level gondolinHttps must verify false. The same field on a correctly resigned v2 receipt must verify true. Receipts come from hmac-audit-receipt-valid and linkage-version-rules. This file is repo-owned; do not fold it into vectors/reference/vectors.json.",
+  "source": {
+    "v1": "hmac-audit-receipt-valid.input.receipt",
+    "v2": "linkage-version-rules.input.v2AllowedReceipt"
+  },
+  "change": "set top-level gondolinHttps to true, then resign under the catalog key",
+  "expected": {
+    "v1WithGondolinHttpsResigned": false,
+    "v2WithGondolinHttpsResigned": true
+  }
+}

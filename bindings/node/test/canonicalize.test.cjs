@@ -36,6 +36,29 @@ test("verify never throws", () => {
   assert.equal(verifyAuditReceipt(throwing, row.input.signingKeyUtf8), false);
 });
 
+test("gondolinHttps is v1 only", () => {
+  const root = loadReference();
+  const catalog = loadCatalog(root.vectors);
+  const spec = JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, "..", "..", "..", "vectors", "hmac", "gondolin-https.json"),
+      "utf8",
+    ),
+  );
+  const markedV1 = structuredClone(catalog.v1Receipt);
+  markedV1.gondolinHttps = true;
+  assert.equal(
+    verifyAuditReceipt(resignAuditReceipt(markedV1, catalog.v1Key), catalog.v1Key),
+    spec.expected.v1WithGondolinHttpsResigned,
+  );
+  const markedV2 = structuredClone(catalog.v2Allowed);
+  markedV2.gondolinHttps = true;
+  assert.equal(
+    verifyAuditReceipt(resignAuditReceipt(markedV2, catalog.v2Key), catalog.v2Key),
+    spec.expected.v2WithGondolinHttpsResigned,
+  );
+});
+
 test("reference vectors", () => {
   const root = loadReference();
   const allow = readAllowlist(path.join(referenceDir, "pending-kinds.txt"));

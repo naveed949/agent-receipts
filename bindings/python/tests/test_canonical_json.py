@@ -55,6 +55,24 @@ def test_verify_never_raises():
     assert verify_controlled_integrity(None, None, None, None) is False
 
 
+def test_gondolin_https_is_v1_only():
+    root = json.loads((REFERENCE / "vectors.json").read_text(encoding="utf-8"))
+    catalog = load_catalog(root["vectors"])
+    spec = json.loads((ROOT / "vectors" / "hmac" / "gondolin-https.json").read_text(encoding="utf-8"))
+    marked_v1 = copy.deepcopy(catalog["v1_receipt"])
+    marked_v1["gondolinHttps"] = True
+    assert (
+        verify_audit_receipt(resign_audit_receipt(marked_v1, catalog["v1_key"]), catalog["v1_key"])
+        is spec["expected"]["v1WithGondolinHttpsResigned"]
+    )
+    marked_v2 = copy.deepcopy(catalog["v2_allowed"])
+    marked_v2["gondolinHttps"] = True
+    assert (
+        verify_audit_receipt(resign_audit_receipt(marked_v2, catalog["v2_key"]), catalog["v2_key"])
+        is spec["expected"]["v2WithGondolinHttpsResigned"]
+    )
+
+
 def test_reference_vectors(capsys):
     failures = []
     root = load_reference()

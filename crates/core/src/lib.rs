@@ -9,10 +9,10 @@ use sha2::{Digest, Sha256};
 
 pub use hmac::{
     audit_mac_input_ascii, audit_signing_key, controlled_signing_key, resign_audit_receipt,
-    resign_audit_receipt_bytes, sign_controlled_integrity, verify_audit_receipt,
-    verify_audit_receipt_bytes, verify_controlled_integrity, verify_controlled_integrity_bytes,
-    SignerError, SigningKey, AUDIT_RECEIPT_V2_VERSION, AUDIT_RECEIPT_VERSION,
-    CONTROLLED_INTEGRITY_VERSION,
+    resign_audit_receipt_bytes, sign_controlled_integrity, sign_controlled_integrity_bytes,
+    verify_audit_receipt, verify_audit_receipt_bytes, verify_controlled_integrity,
+    verify_controlled_integrity_bytes, SignerError, SigningKey, AUDIT_RECEIPT_V2_VERSION,
+    AUDIT_RECEIPT_VERSION, CONTROLLED_INTEGRITY_VERSION,
 };
 
 #[cfg(test)]

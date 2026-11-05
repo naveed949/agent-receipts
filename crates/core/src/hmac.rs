@@ -80,6 +80,16 @@ pub fn resign_audit_receipt_bytes(receipt: &[u8], key: &[u8]) -> Result<Vec<u8>,
     crate::canonical_json_value(&resigned)
 }
 
+pub fn sign_controlled_integrity_bytes(
+    value: &[u8],
+    key: &[u8],
+    key_id: &str,
+) -> Result<Vec<u8>, SignerError> {
+    let value = crate::parse::parse(value).map_err(|_| SignerError::RejectedInput)?;
+    let evidence = sign_controlled_integrity(&value, key, key_id)?;
+    crate::canonical_json_value(&evidence).map_err(|_| SignerError::RejectedInput)
+}
+
 pub fn verify_controlled_integrity_bytes(
     value: &[u8],
     key: &[u8],
