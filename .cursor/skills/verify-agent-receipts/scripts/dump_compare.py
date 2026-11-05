@@ -7,9 +7,25 @@ import sys
 import agent_receipts as receipts
 
 
+class DuplicateKey(ValueError):
+    pass
+
+
+def reject_duplicate_keys(pairs):
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise DuplicateKey(key)
+        out[key] = value
+    return out
+
+
 def main() -> int:
     try:
-        cmd = json.loads(sys.stdin.read())
+        cmd = json.loads(sys.stdin.read(), object_pairs_hook=reject_duplicate_keys)
+    except DuplicateKey:
+        print("err invalid_input")
+        return 0
     except json.JSONDecodeError as err:
         print(f"err parse {err}")
         return 0
