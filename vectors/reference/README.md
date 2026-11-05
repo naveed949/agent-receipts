@@ -4,4 +4,4 @@
 
 An object whose only key is `$js` is a test envelope. The library treats that key as an ordinary object key. A runner replaces the envelope before it calls the library.
 
-`pending-kinds.txt` lists every `kind` other than `canonicalize`, one per line. Runners print those rows and count them. The eight `canonicalize` rows must match.
+`pending-kinds.txt` lists every `kind` that still has no API, one per line. That file is now only `compareAuthorityContracts`. Runners print those rows and count them. The eight `canonicalize` rows must match. The eight HMAC and linkage rows run in Rust, Python, and Node.

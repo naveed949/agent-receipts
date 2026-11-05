@@ -1,8 +1,8 @@
 {
-  "format": "agent-receipts semantic vectors v0 (draft, unpublished)",
+  "format": "agent-receipts semantic vectors v1",
   "inputEncoding": "Plain JSON. An object of the exact form {\"$js\": T} stands for a value JSON cannot express: T in NaN, Infinity, -Infinity, -0, undefined, bigint:<digits> (native big integer), number:<decimal> (decimal text parsed to an IEEE-754 double).",
-  "generatedBy": "running the reference implementation; not hand-computed",
-  "count": 20,
+  "generatedBy": "running the reference implementation (AdaptiveSandbox main @ a211555); not hand-computed",
+  "count": 23,
   "vectors": [
     {
       "name": "canon-key-order-nested",
@@ -262,9 +262,9 @@
       "input": {
         "signingKeyUtf8": "synthetic-audit-key-0123456789ab",
         "receipt": {
-          "id": "6a335060-6a40-4ff0-a951-bd29202bb694",
+          "id": "cb9373f2-6652-4b04-a196-fcbbdef3ee78",
           "version": "adaptive-sandbox.audit-receipt/v1",
-          "recordedAt": "2026-11-03T21:55:49.639Z",
+          "recordedAt": "2026-11-05T07:11:06.145Z",
           "tool": "file.write",
           "outcome": "denied",
           "decision": "AUTHORITY_DENIED",
@@ -371,17 +371,17 @@
           "integrity": {
             "algorithm": "hmac-sha256",
             "keyId": "synthetic-key-a",
-            "signature": "f370cbd6d98b3e246af38ee32c4451e8a1e00169a11d24b799c2740963801ccd"
+            "signature": "774bbe5c6551d6ac5bf2d3e75a15323390c1fc8dc332c1a212e43cdaeb88ef1c"
           }
         }
       },
       "expected": {
         "result": true,
-        "macInputAscii": "e74a67215cb3f20bcda77053b658e10e67a3ece2d9ee7b0841b88761567a2596",
+        "macInputAscii": "641455c2bf624e84ba0d12a7a75acf04070c968eb3b09b97e8beea9f67256dba",
         "macInputIsSha256HexOfCanonicalUnsigned": true,
         "crossCheckManualSignatureMatches": true
       },
-      "note": "Receipt issued by the real gateway (denied: tool has no authority contract). signature = lowercase hex HMAC-SHA256(key, ASCII bytes of the 64-char lowercase hex SHA-256 of canonical JSON of the receipt minus its 'integrity' field). Note the double hash."
+      "note": "Receipt issued by the real gateway (denied: tool has no authority contract). signature = lowercase hex HMAC-SHA256(key, ASCII bytes of the 64-char lowercase hex SHA-256 of canonical JSON of the receipt with only integrity.signature removed (integrity.algorithm and integrity.keyId are covered)). Note the double hash."
     },
     {
       "name": "hmac-audit-receipt-failures",
@@ -409,12 +409,40 @@
       "note": "verifyAuditReceipt returns a boolean and never throws. A receipt that carries the v2 discriminator but not a complete v2 authority chain fails even when correctly re-signed: signature validity is necessary, not sufficient."
     },
     {
+      "name": "hmac-audit-keyid-swap",
+      "kind": "audit.verifyAuditReceipt",
+      "input": {
+        "signingKeyUtf8": "synthetic-audit-key-0123456789ab",
+        "base": "receipt from hmac-audit-receipt-valid",
+        "change": "integrity.keyId replaced with 'synthetic-key-b', signature unchanged"
+      },
+      "expected": {
+        "swappedKeyIdOldSignature": false,
+        "control_unchanged": true
+      },
+      "note": "integrity.keyId is inside the MAC preimage, so changing it invalidates the signature."
+    },
+    {
+      "name": "hmac-audit-v1-artifact-hash-mismatch",
+      "kind": "audit.verifyAuditReceipt",
+      "input": {
+        "signingKeyUtf8": "synthetic-audit-key-0123456789ab",
+        "base": "receipt from hmac-audit-receipt-valid (v1)",
+        "change": "artifacts.request.hash set to 64 zeros, then correctly re-MACed under the current preimage"
+      },
+      "expected": {
+        "mismatchReMaced": false,
+        "control_reMacedUnchanged": true
+      },
+      "note": "Every artifact's hash must equal stableHash(value) for v1 and v2 receipts; a correct MAC does not rescue a mismatch."
+    },
+    {
       "name": "hmac-key-encoding-and-length",
       "kind": "audit.verifyAuditReceipt",
       "input": {
         "cases": {
           "keyAsUtf8Bytes": "same key supplied as bytes (Uint8Array of UTF-8)",
-          "fiveCharKey": "receipt re-signed with key 'short' and verified with 'short'",
+          "fiveCharKey": "receipt re-MACed with key 'short' and verified with 'short'",
           "runtimeRejectsShortKey": "issue-side runtime with key 'short'",
           "runtimeEightNonAsciiChars": "issue-side runtime with 8 x U+00E9 (16 UTF-8 bytes)",
           "controlledEightNonAsciiChars": "controlled-integrity runtime with 8 x U+00E9",
@@ -458,10 +486,10 @@
       "input": {
         "signingKeyUtf8": "synthetic-linkage-key-0123456789",
         "v2AllowedReceipt": {
-          "id": "3e2d52a8-b48d-4edd-842f-bcc340ef2ab8",
+          "id": "53c5f75e-948e-4dce-9548-fffddf48d342",
           "version": "adaptive-sandbox.audit-receipt/v2",
           "authorityPolicyVersion": "2",
-          "recordedAt": "2026-11-04T06:31:14.483Z",
+          "recordedAt": "2026-11-05T07:11:06.307Z",
           "tool": "https.example",
           "outcome": "allowed",
           "decision": "ALLOWED",
@@ -835,14 +863,14 @@
           "integrity": {
             "algorithm": "hmac-sha256",
             "keyId": "synthetic-key-l",
-            "signature": "4f5bcd19c3d196447904b8cd317e469b2e96bf46c80a06700add7940d17a7a28"
+            "signature": "24c0847b17e62f7289f960f9a0212d430719a0bc978909bf00536cb486028abe"
           }
         },
         "v2DeniedReceipt": {
-          "id": "1b140775-ffc3-47f0-a63b-af2b26729e39",
+          "id": "944bfa2f-4706-46ca-860e-2d4caef3662a",
           "version": "adaptive-sandbox.audit-receipt/v2",
           "authorityPolicyVersion": "2",
-          "recordedAt": "2026-11-04T06:31:14.503Z",
+          "recordedAt": "2026-11-05T07:11:06.310Z",
           "tool": "https.example",
           "outcome": "denied",
           "decision": "AUTHORITY_DENIED",
@@ -1169,11 +1197,11 @@
           "integrity": {
             "algorithm": "hmac-sha256",
             "keyId": "synthetic-key-l",
-            "signature": "fbe871ef2819dc8490a71d90f0e1ce3e099e57969a68331a173c8305471611da"
+            "signature": "f7665eb8443b211e96ac91afc604b6357b61b19c5159f7df754d134f8833403c"
           }
         },
         "v1ReceiptRef": "input.receipt of hmac-audit-receipt-valid (same key as that vector)",
-        "mutationMethod": "Apply the named change, recompute artifacts.<name>.hash = stableHash(value) for any artifact whose value changed, then re-sign correctly. Every case therefore has a valid signature; only version linkage decides."
+        "mutationMethod": "Apply the named change, recompute artifacts.<name>.hash = stableHash(value) for any artifact whose value changed, then re-MAC correctly under the current preimage. Every case therefore has a valid MAC; only version linkage decides."
       },
       "expected": {
         "v2AllowedReceipt": true,
@@ -1209,6 +1237,522 @@
         }
       },
       "note": "Version linkage is checked after the signature. Both v2 receipts were issued by the reference with all authority layers at v2 (the denied one has no granted authority). Each mutation breaks exactly one linkage rule."
+    },
+    {
+      "name": "hmac-audit-pre124-restamp",
+      "kind": "audit.verifyAuditReceipt",
+      "input": {
+        "v1": {
+          "signingKeyUtf8": "synthetic-audit-key-0123456789ab",
+          "receipt": {
+            "id": "6a335060-6a40-4ff0-a951-bd29202bb694",
+            "version": "adaptive-sandbox.audit-receipt/v1",
+            "recordedAt": "2026-11-03T21:55:49.639Z",
+            "tool": "file.write",
+            "outcome": "denied",
+            "decision": "AUTHORITY_DENIED",
+            "requestHash": "1e56e1ae43c9b7b354224c561fb815696fa0c6595f685718d9c3bc0c6ce464e7",
+            "executionDigest": "786696dbc3bded0a5dae8e1e4ce0ec35079c01729dbe6bab9f4e0319be5063d9",
+            "artifacts": {
+              "policy": {
+                "version": "p1",
+                "hash": "e3611077723c7854aaa148ae09304e669230b0e6db25e3d5aef612a7d134c038",
+                "value": {
+                  "agent": {},
+                  "outer": {},
+                  "session": {},
+                  "state": {}
+                }
+              },
+              "contract": {
+                "version": "2",
+                "hash": "6eef0c82d64acb86ac8eedf66b3d52445f8354f8c3b46a1f4e29783d19249820",
+                "value": {
+                  "name": "file.write",
+                  "requiredCapabilities": [
+                    "filesystem:write"
+                  ],
+                  "version": "2"
+                }
+              },
+              "request": {
+                "version": "r1",
+                "hash": "0d9518a9e8d70204f2fbda1cfe7e374965c1595198e1004a0a57becf84d7b16f",
+                "value": {
+                  "agent": {
+                    "capabilities": [
+                      "filesystem:write"
+                    ],
+                    "id": "agent-1"
+                  },
+                  "args": {
+                    "content": {
+                      "redacted": true,
+                      "hash": "0d8c177b80619451969d14432e463ed24aa2d3a5f39cdd85c6b79afa8a5d602c"
+                    },
+                    "path": "docs/example.txt"
+                  },
+                  "session": {
+                    "capabilities": [
+                      "filesystem:write"
+                    ],
+                    "id": "session-1"
+                  },
+                  "tool": "file.write"
+                }
+              },
+              "plan": {
+                "version": "pl1",
+                "hash": "d89636da05f50268bda4dd3e50232fbd53f38478c44666636387fe5f5d3c1516",
+                "value": {
+                  "args": {
+                    "content": {
+                      "redacted": true,
+                      "hash": "0d8c177b80619451969d14432e463ed24aa2d3a5f39cdd85c6b79afa8a5d602c"
+                    },
+                    "path": "docs/example.txt"
+                  },
+                  "effectiveCapabilities": [
+                    "filesystem:write"
+                  ],
+                  "rejection": {
+                    "reason": "tool has no authority contract"
+                  },
+                  "validated": true
+                }
+              },
+              "backend": {
+                "version": "b1",
+                "hash": "188b0e4be5a48b47778e27d8bbfe6df1ed0b59ac326abdf79c295facc48bf8da",
+                "value": {
+                  "keyPersistence": "injected",
+                  "name": "synthetic-backend"
+                }
+              }
+            },
+            "authority": {
+              "declared": {
+                "capabilities": [
+                  "filesystem:write"
+                ]
+              },
+              "requested": {
+                "capabilities": [
+                  "filesystem:write"
+                ],
+                "resources": [
+                  "docs/example.txt"
+                ]
+              },
+              "granted": {
+                "created": false,
+                "capabilities": []
+              },
+              "attemptedDenied": [],
+              "observed": []
+            },
+            "integrity": {
+              "algorithm": "hmac-sha256",
+              "keyId": "synthetic-key-a",
+              "signature": "f370cbd6d98b3e246af38ee32c4451e8a1e00169a11d24b799c2740963801ccd"
+            }
+          }
+        },
+        "v2": {
+          "signingKeyUtf8": "synthetic-linkage-key-0123456789",
+          "receipt": {
+            "id": "3e2d52a8-b48d-4edd-842f-bcc340ef2ab8",
+            "version": "adaptive-sandbox.audit-receipt/v2",
+            "authorityPolicyVersion": "2",
+            "recordedAt": "2026-11-04T06:31:14.483Z",
+            "tool": "https.example",
+            "outcome": "allowed",
+            "decision": "ALLOWED",
+            "requestHash": "947a8c33b7b7c8ef1c1c099011848a7f7b42230e2b8953a9475658ed522c3ce4",
+            "executionDigest": "e0e15eb783a3040642bc70266615a671e55eb78f06a0ce937f76a1bb73af9f9b",
+            "artifacts": {
+              "policy": {
+                "version": "2",
+                "hash": "55cd2e691c412a07a4bce27e53d4cbf22a0b2f7a320a6e2219dbce9d417cd83a",
+                "value": {
+                  "agent": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "outer": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "session": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "state": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  }
+                }
+              },
+              "contract": {
+                "version": "1",
+                "hash": "6f8620a83295e3d0091270ff5ff7aef3f92877a762526f8dd824303f56166c22",
+                "value": {
+                  "authority": {
+                    "allowDegraded": [
+                      "network.https"
+                    ],
+                    "grants": {
+                      "network": {
+                        "https": [
+                          {
+                            "host": "api.example.com",
+                            "maxResponseBytes": 1024,
+                            "methods": [
+                              "GET"
+                            ],
+                            "port": 443,
+                            "protocol": "https",
+                            "redirects": "none",
+                            "resolution": "public-only",
+                            "timeoutMs": 1000
+                          }
+                        ]
+                      },
+                      "version": "2"
+                    },
+                    "required": [
+                      "network.https"
+                    ]
+                  },
+                  "name": "https.example",
+                  "requiredCapabilities": [
+                    "https"
+                  ],
+                  "version": "1"
+                }
+              },
+              "request": {
+                "version": "1",
+                "hash": "947a8c33b7b7c8ef1c1c099011848a7f7b42230e2b8953a9475658ed522c3ce4",
+                "value": {
+                  "agent": {
+                    "authority": {
+                      "network": {
+                        "https": [
+                          {
+                            "host": "api.example.com",
+                            "maxResponseBytes": 1024,
+                            "methods": [
+                              "GET"
+                            ],
+                            "port": 443,
+                            "protocol": "https",
+                            "redirects": "none",
+                            "resolution": "public-only",
+                            "timeoutMs": 1000
+                          }
+                        ]
+                      },
+                      "version": "2"
+                    },
+                    "capabilities": [
+                      "https"
+                    ],
+                    "id": "agent-1"
+                  },
+                  "args": {},
+                  "session": {
+                    "authority": {
+                      "network": {
+                        "https": [
+                          {
+                            "host": "api.example.com",
+                            "maxResponseBytes": 1024,
+                            "methods": [
+                              "GET"
+                            ],
+                            "port": 443,
+                            "protocol": "https",
+                            "redirects": "none",
+                            "resolution": "public-only",
+                            "timeoutMs": 1000
+                          }
+                        ]
+                      },
+                      "version": "2"
+                    },
+                    "capabilities": [
+                      "https"
+                    ],
+                    "id": "session-1"
+                  },
+                  "tool": "https.example"
+                }
+              },
+              "plan": {
+                "version": "1",
+                "hash": "f58d28f4211ceceb19e8e138778f173bb76a8fb3d54cf3416b1393a4045ab1ef",
+                "value": {
+                  "args": {},
+                  "argumentAuthority": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "authority": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "authorityHash": "40dffe0e3958f91d0f37c298e9ab2779a8510c5e2f8fe355337df5be8ab4d470",
+                  "effectiveCapabilities": [
+                    "https"
+                  ],
+                  "validated": true
+                }
+              },
+              "backend": {
+                "version": "1",
+                "hash": "39687ed6cf70284a7da6c7322f62b79d751a744a1ad8d6ea65431a79a18d4405",
+                "value": {
+                  "authority": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "authorityPolicyVersion": "2",
+                  "keyPersistence": "injected",
+                  "name": "synthetic-meta"
+                }
+              }
+            },
+            "authority": {
+              "declared": {
+                "capabilities": [
+                  "https"
+                ],
+                "authority": {
+                  "allowDegraded": [
+                    "network.https"
+                  ],
+                  "grants": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "required": [
+                    "network.https"
+                  ]
+                }
+              },
+              "requested": {
+                "capabilities": [
+                  "https"
+                ],
+                "resources": [],
+                "authority": {
+                  "agent": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  },
+                  "session": {
+                    "network": {
+                      "https": [
+                        {
+                          "host": "api.example.com",
+                          "maxResponseBytes": 1024,
+                          "methods": [
+                            "GET"
+                          ],
+                          "port": 443,
+                          "protocol": "https",
+                          "redirects": "none",
+                          "resolution": "public-only",
+                          "timeoutMs": 1000
+                        }
+                      ]
+                    },
+                    "version": "2"
+                  }
+                }
+              },
+              "granted": {
+                "created": true,
+                "capabilities": [
+                  "https"
+                ],
+                "authority": {
+                  "network": {
+                    "https": [
+                      {
+                        "host": "api.example.com",
+                        "maxResponseBytes": 1024,
+                        "methods": [
+                          "GET"
+                        ],
+                        "port": 443,
+                        "protocol": "https",
+                        "redirects": "none",
+                        "resolution": "public-only",
+                        "timeoutMs": 1000
+                      }
+                    ]
+                  },
+                  "version": "2"
+                }
+              },
+              "attemptedDenied": [],
+              "observed": []
+            },
+            "integrity": {
+              "algorithm": "hmac-sha256",
+              "keyId": "synthetic-key-l",
+              "signature": "4f5bcd19c3d196447904b8cd317e469b2e96bf46c80a06700add7940d17a7a28"
+            }
+          }
+        },
+        "restamp": "re-MAC under the current preimage with the same key; nothing else changes"
+      },
+      "expected": {
+        "v1AsIssued": false,
+        "v1Restamped": true,
+        "v1RestampedSignature": "457637ca5dffaa93a48c9ebb1c2aa9808fb337c222aaa1d721736a7270102ffb",
+        "v2AsIssued": false,
+        "v2Restamped": true,
+        "v2RestampedSignature": "6f90b14aed3dd7a5e404870f752d1f3eb66df0f30f00e2b2ea177fa4eae07b9b"
+      },
+      "note": "Receipts signed under the earlier preimage (MAC over the receipt with the whole integrity object removed) fail verification as issued and verify once re-MACed under the current preimage."
     },
     {
       "name": "cmp-v1-widening",
