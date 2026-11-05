@@ -9,6 +9,7 @@ Rust, Python, and Node produce the same canonical hex and the same `stableHash` 
 - `agree-text` requires identical Rust and Python results for every `vectors/text` file, and prints `text <name> rust-python ok`.
 - `agree-pending` requires `pending 0`, the exact line `hmac 8 ok`, the exact line `compare 7 ok`, and `reference 8 ok`.
 - `agree-compare` drives every `compareAuthorityContracts` row and every `cmp-rejections` subcase through Rust, Python, and Node dumps and requires identical output lines.
+- `agree-compare-duplicate-keys` drives two wrapper payloads whose `next.filesystem.read` key repeats, and requires `err invalid_input` from all three dumps. Last-win `unchanged` or `narrowing` is `FAIL`.
 - `agree-hmac` drives every HMAC subcase — including uppercase, null, missing integrity, and every `v2Mutations` / `v1Mutations` label — through Rust, Python, and Node dumps and requires identical output lines.
 - `agree-toolchain` fails closed if the Python wheel or Node addon is not importable.
 
@@ -25,7 +26,7 @@ Preconditions:
 - `vectors/reference/vectors.json` and a non-empty `vectors/text` directory exist.
 
 - **Dump and compare.** Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh`. The `cross-language-agreement` row is `PASS`.
-- **Per row.** `cross-language-agreement.log` lists every reference success as `rust-python-node ok`, the rejection row as `python-node type_error`, every text file as `rust-python ok`, every comparison row as `compare <name> rust-python-node ok`, then `pending 0`, `hmac 8 ok`, `compare 7 ok`, `reference 8 ok`, `text 9 ok`, and `agreement: ok`.
+- **Per row.** `cross-language-agreement.log` lists every reference success as `rust-python-node ok`, the rejection row as `python-node type_error`, every text file as `rust-python ok`, every comparison row as `compare <name> rust-python-node ok`, `compare dump-duplicate-keys rust-python-node ok`, then `pending 0`, `hmac 8 ok`, `compare 7 ok`, `reference 8 ok`, `text 9 ok`, and `agreement: ok`.
 - **Missing build.** If the wheel is not importable or `bindings/node/index.js` is missing, the row is `FAIL`. It is not `PASS`.
 
 ## Gotchas

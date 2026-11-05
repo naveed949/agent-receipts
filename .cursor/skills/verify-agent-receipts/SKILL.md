@@ -67,7 +67,7 @@ The script drives every surface that exists on this checkout:
 | `cargo-test` | `cargo test --workspace` (includes `crates/core/tests/vectors.rs` over `vectors/text` and the reference runner) |
 | `python-abi3` | `maturin build --release --manifest-path bindings/python/Cargo.toml --interpreter python3`, install the wheel path maturin reports for this build, then `python3 -m pytest bindings/python/tests` |
 | `node-napi` | in `bindings/node`: `npm ci`, `npm run build`, `npm test` |
-| `cross-language-agreement` | compare Rust, Python, and Node on every reference success row (`canonicalUtf8Hex` and `stableHash`), compare Rust, Python, and Node on every HMAC subcase, compare Rust, Python, and Node on every `compareAuthorityContracts` row and subcase, and compare Rust and Python on every `vectors/text` file |
+| `cross-language-agreement` | compare Rust, Python, and Node on every reference success row (`canonicalUtf8Hex` and `stableHash`), compare Rust, Python, and Node on every HMAC subcase, compare Rust, Python, and Node on every `compareAuthorityContracts` row and subcase, reject dump last-win on duplicate `filesystem.read` keys as `invalid_input`, and compare Rust and Python on every `vectors/text` file |
 | `hmac-verification` | require a zero-failure pytest summary, the exact line `hmac 8 ok` from Node and from agreement, `test reference::reference_vectors ... ok` from cargo, and the verify/resign HMAC API in source |
 | `authority-contract-comparison` | require `compare 7 ok` from Node and from agreement, `test reference::reference_vectors ... ok` from cargo, and the compare API in source |
 

@@ -281,6 +281,13 @@ def check_reference(
         failed += 1
         print("hmac gondolin-https ... FAILED")
         print(f"  {err}", file=sys.stderr)
+    try:
+        check_compare_duplicate_dumps(compare_dumps)
+        print("compare dump-duplicate-keys rust-python-node ok")
+    except Exception as err:
+        failed += 1
+        print("compare dump-duplicate-keys ... FAILED")
+        print(f"  {err}", file=sys.stderr)
     print(f"pending {len(pending_lines)}")
     print(f"hmac {hmac_ok} ok")
     print(f"compare {compare_ok} ok")
@@ -310,6 +317,31 @@ def check_compare_row(row, name: str, dumps: tuple[list[str], list[str], list[st
         if spec.get("type") != "TypeError":
             raise ValueError(f"{name} {label} type {spec.get('type')}")
         check_compare_case(f"{name} {label}", child, dumps, None)
+
+
+COMPARE_DUP_SECRET_THEN_EMPTY = (
+    b'{"previous":{"filesystem":{"read":["/public"]}},'
+    b'"next":{"filesystem":{"read":["/secret","/public"],"read":[]}}}'
+)
+COMPARE_DUP_ADMIN_THEN_MATCH = (
+    b'{"previous":{"filesystem":{"read":["/public"]}},'
+    b'"next":{"filesystem":{"read":["/admin"],"read":["/public"]}}}'
+)
+
+
+def check_compare_duplicate_dumps(dumps: tuple[list[str], list[str], list[str]]) -> None:
+    cases = (
+        ("dump-dup-secret-then-empty", COMPARE_DUP_SECRET_THEN_EMPTY),
+        ("dump-dup-admin-then-match", COMPARE_DUP_ADMIN_THEN_MATCH),
+    )
+    for name, raw in cases:
+        rust = run_compare_dump(dumps[0], raw)
+        python = run_compare_dump(dumps[1], raw)
+        node = run_compare_dump(dumps[2], raw)
+        if rust != python or rust != node:
+            raise ValueError(f"{name} language mismatch rust={rust} python={python} node={node}")
+        if rust != ("err", "invalid_input", None):
+            raise ValueError(f"{name} expected invalid_input got {rust}")
 
 
 def check_compare_case(

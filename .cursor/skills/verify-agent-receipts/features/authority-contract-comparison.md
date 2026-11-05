@@ -6,6 +6,7 @@
 
 - `compare-vectors` requires the seven `compareAuthorityContracts` rows in `vectors/reference/vectors.json` to match in Rust, Python, and Node, including every `cmp-rejections` subcase as `TypeError`.
 - `compare-helpers` requires the normalize and subset exports to call Rust.
+- `compare-dump-duplicate-keys` requires the Rust, Python, and Node dumps to print `err invalid_input` on wrapper JSON whose `next.filesystem.read` repeats the key, first with a wider grant then an empty list, then with `"/admin"` then a match of previous. A last-win parse of those payloads is `FAIL`.
 
 ## How to get to it (user POV)
 
@@ -26,3 +27,4 @@ Preconditions:
 
 - A passing canonicalize or HMAC row is not this feature.
 - Agreement must compare the live Rust, Python, and Node results to each other, not only to the vector file.
+- A dump that last-wins a duplicate JSON key is not this feature. `compare_authority_contracts_bytes` returns `invalid_input` on that text. The dumps must print that code, not a relationship.
