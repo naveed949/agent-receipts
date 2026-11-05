@@ -20,8 +20,8 @@ Preconditions:
 - `scripts/verify.sh doctor` has been run.
 
 - **Record presence.** Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh`. The `authority-contract-comparison` row is `PASS` with `rust python node compare 7 ok`.
-- **Counts.** `node-napi.log` and `cross-language-agreement.log` contain the exact line `compare 7 ok`. `cargo-test.log` contains `test reference::reference_vectors ... ok`.
-- **Proof.** The summary table shows `PASS`. Never `NOT_IMPLEMENTED`.
+- **Counts.** `node-napi.log` matches `^#? ?compare 7 ok$`. `cross-language-agreement.log` contains the exact line `compare 7 ok`. `cargo-test.log` contains `test reference::reference_vectors ... ok`.
+- **Proof.** The summary table shows `PASS` when those lines exist. If the compare name is absent from source, the row is `NOT_IMPLEMENTED`. `record_authority` does not look for the helper export names or for `compare dump-duplicate-keys rust-python-node ok`. Agreement still prints that dump line.
 
 ## Gotchas
 

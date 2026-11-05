@@ -4,11 +4,11 @@ An async streaming verifier is not part of this checkout. `canonical_json` and `
 
 ## Sub-features
 
-- `async-absent` confirms there is no `async fn` in `crates/core/src` or the bindings source that this skill searches.
+- `async-absent` confirms there is no `async fn` under `crates/core/src`, `bindings/python/src`, `bindings/python/tests`, `bindings/node/src`, or `bindings/node/test`. The pattern is the Rust tokens `async fn`. `async function` and `async def` do not trip it.
 
 ## How to get to it (user POV)
 
-- There is no user entry point. Callers pass a complete byte slice and receive a complete rewrite or error.
+- There is no user entry point. `canonical_json` and `stable_hash` return one whole result. Rust bytes entries take a slice. Python and Node also accept a host value. A Node buffer is `type_error`.
 
 ## Driving it with verify.sh
 
