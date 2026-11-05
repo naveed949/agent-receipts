@@ -23,7 +23,7 @@ This directory is the maintained source for verifying agent-receipts. Read this 
 - Capture the command and the resulting status line, not only the last screen of output.
 - `PASS` is allowed only for a surface the script actually ran.
 - `FAIL` is required when a toolchain for an existing surface is missing.
-- `NOT_IMPLEMENTED` is required for HMAC verification, authority-contract comparison, the async streaming verifier, benchmarks, and the reference pending kinds, until those APIs exist. Canonicalization stays a passing feature.
+- `NOT_IMPLEMENTED` is required for authority-contract comparison, the async streaming verifier, benchmarks, and the remaining reference pending kind, until those APIs exist. Canonicalization and HMAC verification stay passing features.
 - `UNSUPPORTED` is only for a product surface that cannot run on this OS even with the toolchain. There is no such surface on the CI targets today. Do not use it as a skip for a missing `rustfmt` or `node`.
 - Do not report a skipped entry point as verified through a different path.
 
@@ -45,7 +45,7 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Python abi3 wheel](./python-abi3.md) covers the `cp39-abi3` wheel and pytest against that wheel.
 - [Node napi binding](./node-napi.md) covers `napi build` and the Node reference tests.
 - [Cross-language agreement](./cross-language-agreement.md) covers Rust, Python, and Node on the reference rows, and Rust and Python on `vectors/text`.
-- [HMAC verification](./hmac-verification.md) is not yet implemented.
+- [HMAC verification](./hmac-verification.md) covers audit-receipt verify and resign, controlled integrity, and the eight HMAC reference rows.
 - [Authority-contract comparison](./authority-contract-comparison.md) is not yet implemented.
 - [Async streaming verifier](./async-streaming-verifier.md) is not yet implemented.
 - [Benchmarks](./benchmarks.md) are not yet implemented.

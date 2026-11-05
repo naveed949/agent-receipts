@@ -157,7 +157,7 @@ def load_reference(path: Path) -> dict:
     if not isinstance(root, dict) or not isinstance(root.get("vectors"), list):
         raise SystemExit(f"{path} is not a reference file")
     rows = root["vectors"]
-    if root.get("count") != len(rows) or len(rows) != 20:
+    if root.get("count") != len(rows) or len(rows) != 23:
         raise SystemExit(f"count {root.get('count')} len {len(rows)}")
     return root
 
@@ -168,7 +168,10 @@ def check_reference(reference: Path, rust_cmd: list[str], node_cmd: list[str]) -
     pending_lines: list[str] = []
     seen: list[str] = []
     ok = 0
+    hmac_ok = 0
     failed = 0
+    hmac_kinds = ("controlled-integrity", "audit.verifyAuditReceipt")
+    catalog = load_hmac_catalog(root["vectors"])
     for row in root["vectors"]:
         name = row.get("name")
         kind = row.get("kind")
@@ -186,6 +189,17 @@ def check_reference(reference: Path, rust_cmd: list[str], node_cmd: list[str]) -
             else:
                 ok += 1
             continue
+        if kind in hmac_kinds:
+            try:
+                check_hmac_row(row, name, catalog)
+            except Exception as err:
+                failed += 1
+                print(f"hmac {name} ... FAILED")
+                print(f"  {err}", file=sys.stderr)
+            else:
+                hmac_ok += 1
+                print(f"hmac {name} ok")
+            continue
         if kind not in allow:
             failed += 1
             print(f"unknown kind {kind}", file=sys.stderr)
@@ -199,13 +213,19 @@ def check_reference(reference: Path, rust_cmd: list[str], node_cmd: list[str]) -
         if kind not in seen:
             failed += 1
             print(f"unused pending kind {kind}", file=sys.stderr)
-    if ok != 8 or len(pending_lines) != 12 or ok + len(pending_lines) != 20:
+    if (
+        ok != 8
+        or hmac_ok != 8
+        or len(pending_lines) != 7
+        or ok + hmac_ok + len(pending_lines) != 23
+    ):
         failed += 1
         print(
-            f"counts canonicalize {ok} pending {len(pending_lines)}",
+            f"counts canonicalize {ok} hmac {hmac_ok} pending {len(pending_lines)}",
             file=sys.stderr,
         )
     print(f"pending {len(pending_lines)}")
+    print(f"hmac {hmac_ok} ok")
     print(f"reference {ok} ok")
     return failed
 
@@ -278,6 +298,137 @@ def check_text(directory: Path, rust_cmd: list[str]) -> int:
     if passed != len(paths):
         failed += 1
     return failed
+
+
+HMAC_ROW_NAMES = (
+    "hmac-controlled-sign-and-verify",
+    "hmac-audit-receipt-valid",
+    "hmac-audit-receipt-failures",
+    "hmac-audit-keyid-swap",
+    "hmac-audit-v1-artifact-hash-mismatch",
+    "hmac-key-encoding-and-length",
+    "linkage-version-rules",
+    "hmac-audit-pre124-restamp",
+)
+
+
+def load_hmac_catalog(rows: list) -> dict:
+    catalog = {}
+    for row in rows:
+        if row.get("name") == "hmac-audit-receipt-valid":
+            catalog["v1_receipt"] = row["input"]["receipt"]
+            catalog["v1_key"] = row["input"]["signingKeyUtf8"]
+        if row.get("name") == "linkage-version-rules":
+            catalog["v2_allowed"] = row["input"]["v2AllowedReceipt"]
+            catalog["v2_denied"] = row["input"]["v2DeniedReceipt"]
+            catalog["v2_key"] = row["input"]["signingKeyUtf8"]
+    return catalog
+
+
+def check_hmac_row(row, name: str, catalog: dict) -> None:
+    import copy
+
+    import agent_receipts as receipts
+
+    if name not in HMAC_ROW_NAMES:
+        raise ValueError(f"unimplemented {name}")
+    if name == "hmac-controlled-sign-and-verify":
+        key = row["input"]["signingKeyUtf8"]
+        key_id = row["input"]["keyId"]
+        value = decode(row["input"]["value"])
+        evidence = receipts.sign_controlled_integrity(value, key, key_id)
+        if evidence["integrityDigest"] != row["expected"]["sign"]["evidence"]["integrityDigest"]:
+            raise ValueError("controlled digest")
+        cases = row["input"]["verifyCases"]
+        for label, want in row["expected"]["verify"].items():
+            if label == "tamperedValue":
+                got = receipts.verify_controlled_integrity(
+                    {"a": "y", "b": [1, 2]}, key, key_id, cases["valid"]
+                )
+            else:
+                got = receipts.verify_controlled_integrity(value, key, key_id, cases[label])
+            if got is not want:
+                raise ValueError(f"controlled {label}")
+        return
+    if name == "hmac-audit-receipt-valid":
+        key = row["input"]["signingKeyUtf8"]
+        receipt = row["input"]["receipt"]
+        if receipts.verify_audit_receipt(receipt, key) is not row["expected"]["result"]:
+            raise ValueError("audit valid")
+        document = copy.deepcopy(receipt)
+        del document["integrity"]["signature"]
+        if receipts.stable_hash(document) != row["expected"]["macInputAscii"]:
+            raise ValueError("macInputAscii")
+        return
+    if name == "hmac-audit-receipt-failures":
+        key = catalog["v1_key"]
+        receipt = catalog["v1_receipt"]
+        expected = row["expected"]
+        tampered = copy.deepcopy(receipt)
+        tampered["outcome"] = "allowed"
+        if receipts.verify_audit_receipt(tampered, key) is not expected["tamperedOutcome"]:
+            raise ValueError("tamperedOutcome")
+        if (
+            receipts.verify_audit_receipt(receipt, "synthetic-audit-key-WRONG-0000000")
+            is not expected["wrongKey"]
+        ):
+            raise ValueError("wrongKey")
+        return
+    if name == "hmac-audit-keyid-swap":
+        receipt = catalog["v1_receipt"]
+        key = catalog["v1_key"]
+        swapped = copy.deepcopy(receipt)
+        swapped["integrity"]["keyId"] = "synthetic-key-b"
+        if (
+            receipts.verify_audit_receipt(swapped, key)
+            is not row["expected"]["swappedKeyIdOldSignature"]
+        ):
+            raise ValueError("keyid swap")
+        if receipts.verify_audit_receipt(receipt, key) is not row["expected"]["control_unchanged"]:
+            raise ValueError("keyid control")
+        return
+    if name == "hmac-audit-v1-artifact-hash-mismatch":
+        key = catalog["v1_key"]
+        mismatched = copy.deepcopy(catalog["v1_receipt"])
+        mismatched["artifacts"]["request"]["hash"] = "0" * 64
+        resigned = receipts.resign_audit_receipt(mismatched, key)
+        if receipts.verify_audit_receipt(resigned, key) is not row["expected"]["mismatchReMaced"]:
+            raise ValueError("v1 hash mismatch")
+        return
+    if name == "hmac-key-encoding-and-length":
+        key = catalog["v1_key"]
+        if (
+            receipts.verify_audit_receipt(catalog["v1_receipt"], key.encode("utf-8"))
+            is not row["expected"]["keyAsUtf8Bytes"]
+        ):
+            raise ValueError("key as bytes")
+        return
+    if name == "linkage-version-rules":
+        key = catalog["v2_key"]
+        if receipts.verify_audit_receipt(catalog["v2_allowed"], key) is not row["expected"][
+            "v2AllowedReceipt"
+        ]:
+            raise ValueError("v2 allowed")
+        if receipts.verify_audit_receipt(catalog["v2_denied"], key) is not row["expected"][
+            "v2DeniedReceipt"
+        ]:
+            raise ValueError("v2 denied")
+        return
+    if name == "hmac-audit-pre124-restamp":
+        expected = row["expected"]
+        for label in ("v1", "v2"):
+            case = row["input"][label]
+            key = case["signingKeyUtf8"]
+            receipt = case["receipt"]
+            if receipts.verify_audit_receipt(receipt, key) is not expected[f"{label}AsIssued"]:
+                raise ValueError(f"{label} as issued")
+            restamped = receipts.resign_audit_receipt(receipt, key)
+            if receipts.verify_audit_receipt(restamped, key) is not expected[f"{label}Restamped"]:
+                raise ValueError(f"{label} restamped")
+            if restamped["integrity"]["signature"] != expected[f"{label}RestampedSignature"]:
+                raise ValueError(f"{label} restamp signature")
+        return
+    raise ValueError(f"unimplemented {name}")
 
 
 def check_text_file(path: Path, rust_cmd: list[str]) -> None:

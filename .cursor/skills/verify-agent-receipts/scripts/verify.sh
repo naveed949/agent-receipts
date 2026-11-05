@@ -176,6 +176,37 @@ record_reserved() {
   record "$id" NOT_IMPLEMENTED "no API on this checkout"
 }
 
+record_hmac() {
+  local cargo_log=$EVIDENCE/cargo-test.log
+  local py_log=$EVIDENCE/python-abi3.log
+  local node_log=$EVIDENCE/node-napi.log
+  if ! code_has 'verify_audit_receipt|verifyAuditReceipt'; then
+    record hmac-verification FAIL "verify API missing"
+    return
+  fi
+  if ! code_has 'resign_audit_receipt|resignAuditReceipt'; then
+    record hmac-verification FAIL "resign API missing"
+    return
+  fi
+  if [[ ! -f "$cargo_log" ]] || ! grep -q 'test reference::reference_vectors ... ok' "$cargo_log"; then
+    record hmac-verification FAIL "rust reference_vectors not ok; see $cargo_log"
+    return
+  fi
+  if [[ ! -f "$py_log" ]] || ! grep -qE '[0-9]+ passed' "$py_log"; then
+    record hmac-verification FAIL "python pytest passed line missing; see $py_log"
+    return
+  fi
+  if [[ ! -f "$node_log" ]] || ! grep -q 'hmac 8 ok' "$node_log"; then
+    record hmac-verification FAIL "node hmac 8 ok missing; see $node_log"
+    return
+  fi
+  if [[ ! -f "$EVIDENCE/cross-language-agreement.log" ]] || ! grep -q 'hmac 8 ok' "$EVIDENCE/cross-language-agreement.log"; then
+    record hmac-verification FAIL "agreement hmac 8 ok missing; see $EVIDENCE/cross-language-agreement.log"
+    return
+  fi
+  record hmac-verification PASS "rust python node hmac 8 ok"
+}
+
 record_pending_kinds() {
   local file="$REPO_ROOT/vectors/reference/pending-kinds.txt"
   local kind
@@ -199,7 +230,7 @@ record_pending_kinds() {
       return
     fi
   done <"$file"
-  record reference-pending-kinds NOT_IMPLEMENTED "reference kinds other than canonicalize have no API"
+  record reference-pending-kinds NOT_IMPLEMENTED "compareAuthorityContracts has no API"
 }
 
 record_benchmarks() {
@@ -438,8 +469,8 @@ else
   record cross-language-agreement FAIL "see $EVIDENCE/cross-language-agreement.log"
 fi
 
-record_reserved hmac-verification 'hmac'
-record_reserved authority-contract-comparison 'authority'
+record_hmac
+record_reserved authority-contract-comparison 'compare_authority_contracts|compareAuthorityContracts'
 record_reserved async-streaming-verifier 'async[[:space:]]+fn'
 record_benchmarks
 record_pending_kinds

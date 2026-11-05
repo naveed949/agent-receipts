@@ -1,6 +1,6 @@
 # Canonical JSON
 
-`canonical_json` and `stable_hash` rewrite one JSON value into the reference form, or return a stable error code. Python and Node expose the same two operations. Eight reference rows match. The other reference rows are pending.
+`canonical_json` and `stable_hash` rewrite one JSON value into the reference form, or return a stable error code. Python and Node expose the same two operations. Eight reference rows match. The HMAC rows run separately. The remaining reference rows are pending.
 
 ## Sub-features
 
@@ -8,7 +8,7 @@
 - `canon-stable` returns the same bytes when the successful output is passed in again.
 - `canon-reject` returns `type_error` for each child of the canonicalize row that carries `expectedError`.
 - `canon-text` runs `vectors/text` through the Rust and Python bytes entry. Node does not read that directory.
-- `canon-pending` prints each non-canonicalize kind and counts 12 pending rows beside 8 canonicalize rows.
+- `canon-pending` prints each still-pending kind and counts 7 pending rows beside 8 canonicalize rows and 8 HMAC rows.
 
 ## How to get to it (user POV)
 
@@ -26,8 +26,8 @@ Preconditions:
 - `vectors/text` contains the JSON files named by the Rust vector runner.
 
 - **Rust cases.** Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh`. The `cargo-test` row is `PASS`. `cargo-test.log` contains `running 9 vector cases` and `test reference::reference_vectors ... ok`.
-- **Python cases.** Read `python-abi3.log`. pytest exits 0. The reference test checks the captured `pending 12` and `canonicalize 8 ok` lines.
-- **Node cases.** Read `node-napi.log`. It contains `pending 12` and `canonicalize 8 ok`.
+- **Python cases.** Read `python-abi3.log`. pytest exits 0. The reference test checks the captured `pending 7`, `canonicalize 8 ok`, and `hmac 8 ok` lines.
+- **Node cases.** Read `node-napi.log`. It contains `pending 7`, `canonicalize 8 ok`, and `hmac 8 ok`.
 - **Proof.** The `cross-language-agreement` row is `PASS`. Success rows are `rust-python-node ok`. Text files are `rust-python ok`.
 
 ## Gotchas

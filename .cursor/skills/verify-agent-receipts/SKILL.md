@@ -1,6 +1,6 @@
 ---
 name: verify-agent-receipts
-description: "Use when verifying agent-receipts on a local checkout, before a push, after changing canonical_json, stable_hash, or their Python or Node bindings, after changing files under vectors/reference or vectors/text, or when fmt, clippy, cargo test, maturin, pytest, or napi results are in doubt."
+description: "Use when verifying agent-receipts on a local checkout, before a push, after changing canonical_json, stable_hash, HMAC verify or resign, or their Python or Node bindings, after changing files under vectors/reference or vectors/text, or when fmt, clippy, cargo test, maturin, pytest, or napi results are in doubt."
 ---
 
 # Verify agent-receipts
@@ -68,16 +68,16 @@ The script drives every surface that exists on this checkout:
 | `python-abi3` | `maturin build --release --manifest-path bindings/python/Cargo.toml --interpreter python3`, install the single `*cp39-abi3*.whl`, then `python3 -m pytest bindings/python/tests` |
 | `node-napi` | in `bindings/node`: `npm ci`, `npm run build`, `npm test` |
 | `cross-language-agreement` | compare Rust, Python, and Node on every reference success row (`canonicalUtf8Hex` and `stableHash`), and compare Rust and Python on every `vectors/text` file |
+| `hmac-verification` | require `hmac 8 ok` from the Python and Node reference runners, `test reference::reference_vectors ... ok` from cargo, and the verify/resign HMAC API in source |
 
 It then records reserved names from `docs/DECISIONS.md` that have no API yet:
 
-- `hmac-verification`
 - `authority-contract-comparison`
 - `async-streaming-verifier`
 - `benchmarks`
 - `reference-pending-kinds`
 
-Those rows are `NOT_IMPLEMENTED` when source under `crates/core/src` and the bindings has no matching API. If that API appears, the row is `FAIL` (stale skill), never `PASS`. Canonicalization stays `PASS`. Pending reference kinds stay `NOT_IMPLEMENTED`.
+Those rows are `NOT_IMPLEMENTED` when source under `crates/core/src` and the bindings has no matching API. If that API appears, the row is `FAIL` (stale skill), never `PASS`. Canonicalization and HMAC verification stay `PASS` when the script actually drove them. The remaining pending reference kind stays `NOT_IMPLEMENTED`.
 
 Drive each mapped feature through this script. The feature file names the surface id and the log to read. Do not mark a feature passed because a different surface passed.
 
@@ -85,7 +85,7 @@ Drive each mapped feature through this script. The feature file names the surfac
 
 Logs live in `$VERIFY_EVIDENCE_DIR` when set, else `/tmp/agent-receipts-verify-<timestamp>-<pid>/`.
 
-Proof for an existing surface is the command log plus a `PASS` or `FAIL` line. Proof for agreement is `reference <name> rust-python-node ok` for each success row, `reference <name> python-node type_error` for the rejection row, `text <name> rust-python ok` for every file in `vectors/text`, then `pending 12`, `reference 8 ok`, and `text` with a count equal to the number of text files. Proof for a reserved feature is a `NOT_IMPLEMENTED` line, not a skipped `PASS`.
+Proof for an existing surface is the command log plus a `PASS` or `FAIL` line. Proof for agreement is `reference <name> rust-python-node ok` for each success row, `reference <name> python-node type_error` for the rejection row, `text <name> rust-python ok` for every file in `vectors/text`, then `pending 7`, `hmac 8 ok`, `reference 8 ok`, and `text` with a count equal to the number of text files. Proof for HMAC is `hmac 8 ok` in `python-abi3.log` and `node-napi.log`, plus `test reference::reference_vectors ... ok` in `cargo-test.log`. Proof for a reserved feature is a `NOT_IMPLEMENTED` line, not a skipped `PASS`.
 
 `summary.txt` and `summary.tsv` in the evidence directory are the pass/fail table. Keep them. Cleanup must not delete that directory.
 
