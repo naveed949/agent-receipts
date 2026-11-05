@@ -14,7 +14,7 @@ Build the release wheel and the release Node addon, then run one command from a 
 
 The command writes `bench/results/full.json` and prints a host table, then a Rust table. The table units are microseconds. When `git status` is dirty, the command writes `bench/results/full.dirty.json` and does not replace `bench/results/full.json`.
 
-`./bench/run full` pins one CPU with `taskset` when that program is on `PATH` and the current mask covers more than one CPU. Pass `--allow-unpinned` to skip the pin and record the reason. If `taskset` is missing, the file records `unpinned` and the run still completes.
+`./bench/run full` records `pinned` when the process already has one CPU. If the mask covers more than one CPU, it re-execs under `taskset -c` on the lowest allowed CPU. Pass `--allow-unpinned` to skip that re-exec and record the reason. If `taskset` is missing and the mask is still wider than one CPU, the file records `unpinned` and the run still completes.
 
 `./bench/run parse bench/results/full.json` checks the file. It does not time anything. Parse exits 0 only when the vector gate passed with counts 8, 8, and 7, and each sample array has the length `effort` requires for that case.
 
@@ -34,7 +34,7 @@ The discarded warmup calls use the same call. The timed loop then does this.
 
 1. Read the clock.
 2. Call the public export on the value that already exists.
-3. Read the string length, the boolean, or `relationship`.
+3. Read the string length, the boolean, or `relationship`. TypeScript and Node also copy `widened` and `narrowed` on a compare. Python and Rust read the relationship length only.
 4. Read the clock again.
 
 The loop does not call a garbage collector, and it does not stringify the result. The read in step 3 is inside the interval so the result has to exist.
@@ -46,13 +46,13 @@ The loop does not call a garbage collector, and it does not stringify the result
 | `python_abi3` | the snake_case functions on objects from the installed wheel | `read_input` under the GIL, `py.detach` around the core, then the `str` or `dict` built under the GIL. The bytes entry is not the call. |
 | `rust_native` | the value functions on an owned `Json` | The core only. The `Json` was built with the public constructors before the clock. `std::hint::black_box` holds the observed value. |
 
-`includesHostMarshalling` is true when the implementation is not `rust_native`. The host table is built only from the three host series. Nothing in the printer sorts a native series into that list.
+The results file does not store an `includesHostMarshalling` field. The host table is only `typescript`, `node_napi`, and `python_abi3`. Nothing in the printer sorts a `rust_native` series into that list.
 
 `stable_hash` emits canonical JSON again and then hashes those bytes. Adding a `canonical_json` row to a `stable_hash` row counts the emit twice. The report does not add them.
 
 ## Warmup, clocks, and noise
 
-Smoke uses warmup 2 and 5 iterations in one process. Full uses five processes. Each process warms up again, so the p95 spread includes JIT and process startup, not only the steady state inside one isolate.
+Smoke uses warmup 2 and 5 iterations in one process. Full uses five processes. The clock starts after that process exists, and after warmup. Each process warms up again, so the p95 spread includes JIT differences across isolates. Process startup is not inside a sample.
 
 Full iteration counts come from the canonical UTF-8 size of the case.
 
@@ -76,7 +76,7 @@ A native call on the small vector can take a few hundred nanoseconds. Part of th
 
 The result of each call is a new string, boolean, or object. The loop does not collect on purpose. A later iteration can still hit a collection that the runtime schedules. That shows up in the spread. It is not a step of the plan. The results file records `gcInTimedRegion` as false for that reason.
 
-Shared machines add their own noise. Other processes, frequency changes, and a wide CPU mask move p95. Full pins one CPU when `taskset` exists. The spread then includes a fresh process and its JIT on every repeat. The committed file is one run on one machine. The bench workflow runs only smoke, on a shared runner, and a failure there does not block the other checks.
+Shared machines add their own noise. Other processes, frequency changes, and a wide CPU mask move p95. Full records `pinned` when the mask is already one CPU, or when `taskset` can re-exec onto one CPU. The spread then includes a fresh process and its JIT on every repeat. The committed file is one run on one machine. The bench workflow runs only smoke, on a shared runner, and a failure there does not block the other checks.
 
 p95 spread is the max minus the min of the per-run p95. The printed p50, p95, p99, and mean come from the run whose p50 is the median p50. Samples from different processes are not pooled. When that spread is wider than 15% of the median p95, and each run has at least 400 samples, the command prints `unstable` plus the operation, the case, and the implementation. The process still exits 0. The 524288 byte rows have 80 samples, so they do not print `unstable` even when they move.
 
