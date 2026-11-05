@@ -162,7 +162,14 @@ def load_reference(path: Path) -> dict:
     return root
 
 
-def check_reference(reference: Path, rust_cmd: list[str], node_cmd: list[str]) -> int:
+def check_reference(
+    reference: Path,
+    rust_cmd: list[str],
+    node_cmd: list[str],
+    rust_hmac: list[str],
+    python_hmac: list[str],
+    node_hmac: list[str],
+) -> int:
     root = load_reference(reference / "vectors.json")
     allow = read_allowlist(reference / "pending-kinds.txt")
     pending_lines: list[str] = []
@@ -172,6 +179,7 @@ def check_reference(reference: Path, rust_cmd: list[str], node_cmd: list[str]) -
     failed = 0
     hmac_kinds = ("controlled-integrity", "audit.verifyAuditReceipt")
     catalog = load_hmac_catalog(root["vectors"])
+    hmac_dumps = (rust_hmac, python_hmac, node_hmac)
     for row in root["vectors"]:
         name = row.get("name")
         kind = row.get("kind")
@@ -191,7 +199,7 @@ def check_reference(reference: Path, rust_cmd: list[str], node_cmd: list[str]) -
             continue
         if kind in hmac_kinds:
             try:
-                check_hmac_row(row, name, catalog)
+                check_hmac_row(row, name, catalog, hmac_dumps)
             except Exception as err:
                 failed += 1
                 print(f"hmac {name} ... FAILED")
@@ -224,6 +232,13 @@ def check_reference(reference: Path, rust_cmd: list[str], node_cmd: list[str]) -
             f"counts canonicalize {ok} hmac {hmac_ok} pending {len(pending_lines)}",
             file=sys.stderr,
         )
+    try:
+        check_gondolin_https(reference, catalog, hmac_dumps)
+        print("hmac gondolin-https rust-python-node ok")
+    except Exception as err:
+        failed += 1
+        print("hmac gondolin-https ... FAILED")
+        print(f"  {err}", file=sys.stderr)
     print(f"pending {len(pending_lines)}")
     print(f"hmac {hmac_ok} ok")
     print(f"reference {ok} ok")
@@ -325,10 +340,43 @@ def load_hmac_catalog(rows: list) -> dict:
     return catalog
 
 
-def check_hmac_row(row, name: str, catalog: dict) -> None:
-    import copy
+def run_hmac_line(command: list[str], raw: bytes) -> str:
+    completed = subprocess.run(
+        command,
+        input=raw,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        err = completed.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"{command[0]} exited {completed.returncode}: {err}")
+    lines = [line for line in completed.stdout.decode("utf-8").splitlines() if line != ""]
+    if not lines:
+        raise ValueError(f"{command[0]} produced no output")
+    return lines[0]
 
-    import agent_receipts as receipts
+
+def hmac_agree(label: str, payload: dict, dumps: tuple[list[str], list[str], list[str]]) -> str:
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    rust = run_hmac_line(dumps[0], raw)
+    python = run_hmac_line(dumps[1], raw)
+    node = run_hmac_line(dumps[2], raw)
+    if rust != python or python != node:
+        raise ValueError(f"{label} rust={rust} python={python} node={node}")
+    return rust
+
+
+def expect_bool(label: str, line: str, want: bool) -> None:
+    expected = f"ok {'true' if want else 'false'}"
+    if line != expected:
+        raise ValueError(f"{label} got {line} want {expected}")
+
+
+def check_hmac_row(
+    row, name: str, catalog: dict, dumps: tuple[list[str], list[str], list[str]]
+) -> None:
+    import copy
 
     if name not in HMAC_ROW_NAMES:
         raise ValueError(f"unimplemented {name}")
@@ -336,29 +384,58 @@ def check_hmac_row(row, name: str, catalog: dict) -> None:
         key = row["input"]["signingKeyUtf8"]
         key_id = row["input"]["keyId"]
         value = decode(row["input"]["value"])
-        evidence = receipts.sign_controlled_integrity(value, key, key_id)
+        signed = hmac_agree(
+            "controlled sign",
+            {"op": "sign_controlled", "value": value, "key": key, "keyId": key_id},
+            dumps,
+        )
+        if not signed.startswith("ok "):
+            raise ValueError(f"controlled sign {signed}")
+        evidence = json.loads(signed[3:])
         if evidence["integrityDigest"] != row["expected"]["sign"]["evidence"]["integrityDigest"]:
             raise ValueError("controlled digest")
         cases = row["input"]["verifyCases"]
         for label, want in row["expected"]["verify"].items():
-            if label == "tamperedValue":
-                got = receipts.verify_controlled_integrity(
-                    {"a": "y", "b": [1, 2]}, key, key_id, cases["valid"]
-                )
-            else:
-                got = receipts.verify_controlled_integrity(value, key, key_id, cases[label])
-            if got is not want:
-                raise ValueError(f"controlled {label}")
+            target = {"a": "y", "b": [1, 2]} if label == "tamperedValue" else value
+            offered = cases["valid"] if label == "tamperedValue" else cases[label]
+            line = hmac_agree(
+                f"controlled {label}",
+                {
+                    "op": "verify_controlled",
+                    "value": target,
+                    "key": key,
+                    "keyId": key_id,
+                    "evidence": offered,
+                },
+                dumps,
+            )
+            expect_bool(f"controlled {label}", line, want)
         return
     if name == "hmac-audit-receipt-valid":
         key = row["input"]["signingKeyUtf8"]
         receipt = row["input"]["receipt"]
-        if receipts.verify_audit_receipt(receipt, key) is not row["expected"]["result"]:
-            raise ValueError("audit valid")
+        line = hmac_agree(
+            "audit valid",
+            {"op": "verify_audit", "receipt": receipt, "key": key},
+            dumps,
+        )
+        expect_bool("audit valid", line, row["expected"]["result"])
         document = copy.deepcopy(receipt)
         del document["integrity"]["signature"]
-        if receipts.stable_hash(document) != row["expected"]["macInputAscii"]:
-            raise ValueError("macInputAscii")
+        hashed = hmac_agree(
+            "macInputAscii",
+            {"op": "stable_hash", "value": document},
+            dumps,
+        )
+        if hashed != f"ok {row['expected']['macInputAscii']}":
+            raise ValueError(f"macInputAscii {hashed}")
+        resigned = hmac_agree(
+            "audit resign",
+            {"op": "resign", "receipt": receipt, "key": key},
+            dumps,
+        )
+        if json.loads(resigned[3:])["integrity"]["signature"] != receipt["integrity"]["signature"]:
+            raise ValueError("audit resign changed the tag")
         return
     if name == "hmac-audit-receipt-failures":
         key = catalog["v1_key"]
@@ -366,53 +443,218 @@ def check_hmac_row(row, name: str, catalog: dict) -> None:
         expected = row["expected"]
         tampered = copy.deepcopy(receipt)
         tampered["outcome"] = "allowed"
-        if receipts.verify_audit_receipt(tampered, key) is not expected["tamperedOutcome"]:
-            raise ValueError("tamperedOutcome")
-        if (
-            receipts.verify_audit_receipt(receipt, "synthetic-audit-key-WRONG-0000000")
-            is not expected["wrongKey"]
-        ):
-            raise ValueError("wrongKey")
+        expect_bool(
+            "tamperedOutcome",
+            hmac_agree(
+                "tamperedOutcome",
+                {"op": "verify_audit", "receipt": tampered, "key": key},
+                dumps,
+            ),
+            expected["tamperedOutcome"],
+        )
+        expect_bool(
+            "wrongKey",
+            hmac_agree(
+                "wrongKey",
+                {
+                    "op": "verify_audit",
+                    "receipt": receipt,
+                    "key": "synthetic-audit-key-WRONG-0000000",
+                },
+                dumps,
+            ),
+            expected["wrongKey"],
+        )
+        upper = copy.deepcopy(receipt)
+        upper["integrity"]["signature"] = upper["integrity"]["signature"].upper()
+        expect_bool(
+            "uppercaseSignature",
+            hmac_agree(
+                "uppercaseSignature",
+                {"op": "verify_audit", "receipt": upper, "key": key},
+                dumps,
+            ),
+            expected["uppercaseSignature"],
+        )
+        marked = copy.deepcopy(receipt)
+        marked["authorityPolicyVersion"] = "2"
+        expect_bool(
+            "v2DiscriminatorResigned",
+            hmac_agree(
+                "v2DiscriminatorResigned",
+                {"op": "resign_then_verify", "receipt": marked, "key": key},
+                dumps,
+            ),
+            expected["v2DiscriminatorResigned"],
+        )
+        expect_bool(
+            "nullReceipt",
+            hmac_agree(
+                "nullReceipt",
+                {"op": "verify_audit", "receipt": None, "key": key},
+                dumps,
+            ),
+            expected["nullReceipt"],
+        )
+        missing = copy.deepcopy(receipt)
+        del missing["integrity"]
+        expect_bool(
+            "missingIntegrity",
+            hmac_agree(
+                "missingIntegrity",
+                {"op": "verify_audit", "receipt": missing, "key": key},
+                dumps,
+            ),
+            expected["missingIntegrity"],
+        )
         return
     if name == "hmac-audit-keyid-swap":
         receipt = catalog["v1_receipt"]
         key = catalog["v1_key"]
         swapped = copy.deepcopy(receipt)
         swapped["integrity"]["keyId"] = "synthetic-key-b"
-        if (
-            receipts.verify_audit_receipt(swapped, key)
-            is not row["expected"]["swappedKeyIdOldSignature"]
-        ):
-            raise ValueError("keyid swap")
-        if receipts.verify_audit_receipt(receipt, key) is not row["expected"]["control_unchanged"]:
-            raise ValueError("keyid control")
+        expect_bool(
+            "keyid swap",
+            hmac_agree(
+                "keyid swap",
+                {"op": "verify_audit", "receipt": swapped, "key": key},
+                dumps,
+            ),
+            row["expected"]["swappedKeyIdOldSignature"],
+        )
+        expect_bool(
+            "keyid control",
+            hmac_agree(
+                "keyid control",
+                {"op": "verify_audit", "receipt": receipt, "key": key},
+                dumps,
+            ),
+            row["expected"]["control_unchanged"],
+        )
         return
     if name == "hmac-audit-v1-artifact-hash-mismatch":
         key = catalog["v1_key"]
         mismatched = copy.deepcopy(catalog["v1_receipt"])
         mismatched["artifacts"]["request"]["hash"] = "0" * 64
-        resigned = receipts.resign_audit_receipt(mismatched, key)
-        if receipts.verify_audit_receipt(resigned, key) is not row["expected"]["mismatchReMaced"]:
-            raise ValueError("v1 hash mismatch")
+        expect_bool(
+            "v1 hash mismatch",
+            hmac_agree(
+                "v1 hash mismatch",
+                {"op": "resign_then_verify", "receipt": mismatched, "key": key},
+                dumps,
+            ),
+            row["expected"]["mismatchReMaced"],
+        )
+        expect_bool(
+            "v1 hash control",
+            hmac_agree(
+                "v1 hash control",
+                {"op": "resign_then_verify", "receipt": catalog["v1_receipt"], "key": key},
+                dumps,
+            ),
+            row["expected"]["control_reMacedUnchanged"],
+        )
         return
     if name == "hmac-key-encoding-and-length":
         key = catalog["v1_key"]
-        if (
-            receipts.verify_audit_receipt(catalog["v1_receipt"], key.encode("utf-8"))
-            is not row["expected"]["keyAsUtf8Bytes"]
-        ):
-            raise ValueError("key as bytes")
+        expected = row["expected"]
+        expect_bool(
+            "key as bytes",
+            hmac_agree(
+                "key as bytes",
+                {
+                    "op": "verify_audit",
+                    "receipt": catalog["v1_receipt"],
+                    "key": key,
+                    "as": "bytes",
+                },
+                dumps,
+            ),
+            expected["keyAsUtf8Bytes"],
+        )
+        expect_bool(
+            "fiveCharKey",
+            hmac_agree(
+                "fiveCharKey",
+                {"op": "resign_then_verify", "receipt": catalog["v1_receipt"], "key": "short"},
+                dumps,
+            ),
+            expected["fiveCharKey"],
+        )
+        short = hmac_agree(
+            "runtimeRejectsShortKey",
+            {"op": "audit_signing_key", "key": "short"},
+            dumps,
+        )
+        if short != f"err {expected['runtimeRejectsShortKey']['error']['message']}":
+            raise ValueError(f"runtimeRejectsShortKey {short}")
+        eight = "é" * 8
+        eight_line = hmac_agree(
+            "runtimeEightNonAsciiChars",
+            {"op": "audit_signing_key", "key": eight, "utf16Len": 8},
+            dumps,
+        )
+        if eight_line != f"err {expected['runtimeEightNonAsciiChars']['error']['message']}":
+            raise ValueError(f"runtimeEightNonAsciiChars {eight_line}")
+        controlled_ok = hmac_agree(
+            "controlledEightNonAscii",
+            {"op": "controlled_signing_key", "key": eight},
+            dumps,
+        )
+        if controlled_ok != "ok":
+            raise ValueError(f"controlledEightNonAscii {controlled_ok}")
+        fifteen = hmac_agree(
+            "controlledFifteenByteKey",
+            {"op": "controlled_signing_key", "key": "a" * 15, "as": "bytes"},
+            dumps,
+        )
+        if fifteen != f"err {expected['controlledFifteenByteKey']['error']['message']}":
+            raise ValueError(f"controlledFifteenByteKey {fifteen}")
         return
     if name == "linkage-version-rules":
         key = catalog["v2_key"]
-        if receipts.verify_audit_receipt(catalog["v2_allowed"], key) is not row["expected"][
-            "v2AllowedReceipt"
-        ]:
-            raise ValueError("v2 allowed")
-        if receipts.verify_audit_receipt(catalog["v2_denied"], key) is not row["expected"][
-            "v2DeniedReceipt"
-        ]:
-            raise ValueError("v2 denied")
+        expected = row["expected"]
+        expect_bool(
+            "v2 allowed",
+            hmac_agree(
+                "v2 allowed",
+                {"op": "verify_audit", "receipt": catalog["v2_allowed"], "key": key},
+                dumps,
+            ),
+            expected["v2AllowedReceipt"],
+        )
+        expect_bool(
+            "v2 denied",
+            hmac_agree(
+                "v2 denied",
+                {"op": "verify_audit", "receipt": catalog["v2_denied"], "key": key},
+                dumps,
+            ),
+            expected["v2DeniedReceipt"],
+        )
+        for label, want in expected["v2Mutations"].items():
+            mutated = apply_v2_mutation(catalog["v2_allowed"], label)
+            expect_bool(
+                f"v2 {label}",
+                hmac_agree(
+                    f"v2 {label}",
+                    {"op": "resign_then_verify", "receipt": mutated, "key": key},
+                    dumps,
+                ),
+                want,
+            )
+        v1_key = catalog["v1_key"]
+        for label, want in expected["v1Mutations"].items():
+            mutated = apply_v1_mutation(catalog["v1_receipt"], label)
+            expect_bool(
+                f"v1 {label}",
+                hmac_agree(
+                    f"v1 {label}",
+                    {"op": "resign_then_verify", "receipt": mutated, "key": v1_key},
+                    dumps,
+                ),
+                want,
+            )
         return
     if name == "hmac-audit-pre124-restamp":
         expected = row["expected"]
@@ -420,15 +662,157 @@ def check_hmac_row(row, name: str, catalog: dict) -> None:
             case = row["input"][label]
             key = case["signingKeyUtf8"]
             receipt = case["receipt"]
-            if receipts.verify_audit_receipt(receipt, key) is not expected[f"{label}AsIssued"]:
-                raise ValueError(f"{label} as issued")
-            restamped = receipts.resign_audit_receipt(receipt, key)
-            if receipts.verify_audit_receipt(restamped, key) is not expected[f"{label}Restamped"]:
-                raise ValueError(f"{label} restamped")
-            if restamped["integrity"]["signature"] != expected[f"{label}RestampedSignature"]:
+            expect_bool(
+                f"{label} as issued",
+                hmac_agree(
+                    f"{label} as issued",
+                    {"op": "verify_audit", "receipt": receipt, "key": key},
+                    dumps,
+                ),
+                expected[f"{label}AsIssued"],
+            )
+            restamped = hmac_agree(
+                f"{label} restamp",
+                {"op": "resign", "receipt": receipt, "key": key},
+                dumps,
+            )
+            if not restamped.startswith("ok "):
+                raise ValueError(f"{label} restamp {restamped}")
+            body = json.loads(restamped[3:])
+            if body["integrity"]["signature"] != expected[f"{label}RestampedSignature"]:
                 raise ValueError(f"{label} restamp signature")
+            expect_bool(
+                f"{label} restamped",
+                hmac_agree(
+                    f"{label} restamped",
+                    {"op": "verify_audit", "receipt": body, "key": key},
+                    dumps,
+                ),
+                expected[f"{label}Restamped"],
+            )
         return
     raise ValueError(f"unimplemented {name}")
+
+
+def check_gondolin_https(
+    reference: Path, catalog: dict, dumps: tuple[list[str], list[str], list[str]]
+) -> None:
+    import copy
+
+    spec_path = reference.parent / "hmac" / "gondolin-https.json"
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    expected = spec["expected"]
+    marked_v1 = copy.deepcopy(catalog["v1_receipt"])
+    marked_v1["gondolinHttps"] = True
+    expect_bool(
+        "gondolin v1",
+        hmac_agree(
+            "gondolin v1",
+            {"op": "resign_then_verify", "receipt": marked_v1, "key": catalog["v1_key"]},
+            dumps,
+        ),
+        expected["v1WithGondolinHttpsResigned"],
+    )
+    marked_v2 = copy.deepcopy(catalog["v2_allowed"])
+    marked_v2["gondolinHttps"] = True
+    expect_bool(
+        "gondolin v2",
+        hmac_agree(
+            "gondolin v2",
+            {"op": "resign_then_verify", "receipt": marked_v2, "key": catalog["v2_key"]},
+            dumps,
+        ),
+        expected["v2WithGondolinHttpsResigned"],
+    )
+
+
+def apply_v2_mutation(receipt, label):
+    import copy
+
+    receipt = copy.deepcopy(receipt)
+    if label == "resignedUnchanged_control":
+        return receipt
+    if label == "versionTagV1WithMarker2":
+        receipt["version"] = "adaptive-sandbox.audit-receipt/v1"
+        return receipt
+    if label == "markerRemovedV2Tag":
+        del receipt["authorityPolicyVersion"]
+        return receipt
+    if label == "marker3":
+        receipt["authorityPolicyVersion"] = "3"
+        return receipt
+    if label == "policyArtifactVersionLabel1":
+        receipt["artifacts"]["policy"]["version"] = "1"
+        return receipt
+    if label == "planEnvelopeVersion1":
+        receipt["artifacts"]["plan"]["value"]["authority"]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label == "planAuthorityHashUppercase":
+        receipt["artifacts"]["plan"]["value"]["authorityHash"] = receipt["artifacts"]["plan"][
+            "value"
+        ]["authorityHash"].upper()
+        return receipt
+    if label == "artifactHashMismatch":
+        receipt["artifacts"]["policy"]["hash"] = "0" * 64
+        return receipt
+    if label == "argumentAuthorityVersion1":
+        receipt["artifacts"]["plan"]["value"]["argumentAuthority"]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label == "backendMarker1":
+        receipt["artifacts"]["backend"]["value"]["authorityPolicyVersion"] = "1"
+        return refresh_hashes(receipt)
+    if label == "backendAuthorityVersion1":
+        receipt["artifacts"]["backend"]["value"]["authority"]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label.startswith("policyLayer_") and label.endswith("_version1"):
+        layer = label[len("policyLayer_") : -len("_version1")]
+        receipt["artifacts"]["policy"]["value"][layer]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label == "contractGrantsVersion1":
+        receipt["artifacts"]["contract"]["value"]["authority"]["grants"]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label == "requestAgentAuthorityVersion1":
+        receipt["artifacts"]["request"]["value"]["agent"]["authority"]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label == "requestSessionAuthorityVersion1":
+        receipt["artifacts"]["request"]["value"]["session"]["authority"]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label == "grantedDiffersFromEnvelope":
+        receipt["authority"]["granted"]["authority"]["network"] = {}
+        return receipt
+    if label == "grantedRemoved":
+        del receipt["authority"]["granted"]["authority"]
+        return receipt
+    raise ValueError(f"unknown v2 mutation {label}")
+
+
+def apply_v1_mutation(receipt, label):
+    import copy
+
+    receipt = copy.deepcopy(receipt)
+    if label == "resignedUnchanged_control":
+        return receipt
+    if label == "versionTagV2NoMarker":
+        receipt["version"] = "adaptive-sandbox.audit-receipt/v2"
+        return receipt
+    if label == "planEnvelopeVersion2":
+        receipt["artifacts"]["plan"]["value"]["authority"] = {"version": "2"}
+        return refresh_hashes(receipt)
+    if label == "planEnvelopeVersion1Explicit":
+        receipt["artifacts"]["plan"]["value"]["authority"] = {"version": "1"}
+        return refresh_hashes(receipt)
+    if label == "grantedVersion2":
+        receipt["authority"]["granted"]["authority"] = {"version": "2"}
+        return receipt
+    raise ValueError(f"unknown v1 mutation {label}")
+
+
+def refresh_hashes(receipt):
+    import agent_receipts as receipts
+
+    for entry in receipt["artifacts"].values():
+        entry["hash"] = receipts.stable_hash(entry["value"])
+    return receipt
 
 
 def check_text_file(path: Path, rust_cmd: list[str]) -> None:
@@ -460,10 +844,18 @@ def main() -> int:
     parser.add_argument("--rust-dump", required=True)
     parser.add_argument("--node-binding", required=True)
     parser.add_argument("--node-dump", required=True)
+    parser.add_argument("--rust-hmac-dump", required=True)
+    parser.add_argument("--python-hmac-dump", required=True)
+    parser.add_argument("--node-hmac-dump", required=True)
     args = parser.parse_args()
     rust_cmd = [args.rust_dump]
     node_cmd = ["node", args.node_dump, args.node_binding]
-    failed = check_reference(args.reference, rust_cmd, node_cmd)
+    rust_hmac = [args.rust_hmac_dump]
+    python_hmac = [sys.executable, args.python_hmac_dump]
+    node_hmac = ["node", args.node_hmac_dump, args.node_binding]
+    failed = check_reference(
+        args.reference, rust_cmd, node_cmd, rust_hmac, python_hmac, node_hmac
+    )
     failed += check_text(args.text, rust_cmd)
     if failed:
         print("agreement: FAILED")

@@ -65,10 +65,10 @@ The script drives every surface that exists on this checkout:
 | `rustfmt` | `cargo fmt --all --check` |
 | `clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `cargo-test` | `cargo test --workspace` (includes `crates/core/tests/vectors.rs` over `vectors/text` and the reference runner) |
-| `python-abi3` | `maturin build --release --manifest-path bindings/python/Cargo.toml --interpreter python3`, install the single `*cp39-abi3*.whl`, then `python3 -m pytest bindings/python/tests` |
+| `python-abi3` | `maturin build --release --manifest-path bindings/python/Cargo.toml --interpreter python3`, install the wheel path maturin reports for this build, then `python3 -m pytest bindings/python/tests` |
 | `node-napi` | in `bindings/node`: `npm ci`, `npm run build`, `npm test` |
-| `cross-language-agreement` | compare Rust, Python, and Node on every reference success row (`canonicalUtf8Hex` and `stableHash`), and compare Rust and Python on every `vectors/text` file |
-| `hmac-verification` | require `hmac 8 ok` from the Python and Node reference runners, `test reference::reference_vectors ... ok` from cargo, and the verify/resign HMAC API in source |
+| `cross-language-agreement` | compare Rust, Python, and Node on every reference success row (`canonicalUtf8Hex` and `stableHash`), compare Rust, Python, and Node on every HMAC subcase, and compare Rust and Python on every `vectors/text` file |
+| `hmac-verification` | require a zero-failure pytest summary, the exact line `hmac 8 ok` from Node and from agreement, `test reference::reference_vectors ... ok` from cargo, and the verify/resign HMAC API in source |
 
 It then records reserved names from `docs/DECISIONS.md` that have no API yet:
 
@@ -85,7 +85,9 @@ Drive each mapped feature through this script. The feature file names the surfac
 
 Logs live in `$VERIFY_EVIDENCE_DIR` when set, else `/tmp/agent-receipts-verify-<timestamp>-<pid>/`.
 
-Proof for an existing surface is the command log plus a `PASS` or `FAIL` line. Proof for agreement is `reference <name> rust-python-node ok` for each success row, `reference <name> python-node type_error` for the rejection row, `text <name> rust-python ok` for every file in `vectors/text`, then `pending 7`, `hmac 8 ok`, `reference 8 ok`, and `text` with a count equal to the number of text files. Proof for HMAC is `hmac 8 ok` in `python-abi3.log` and `node-napi.log`, plus `test reference::reference_vectors ... ok` in `cargo-test.log`. Proof for a reserved feature is a `NOT_IMPLEMENTED` line, not a skipped `PASS`.
+Proof for an existing surface is the command log plus a `PASS` or `FAIL` line. Proof for agreement is `reference <name> rust-python-node ok` for each success row, `reference <name> python-node type_error` for the rejection row, `text <name> rust-python ok` for every file in `vectors/text`, then `pending 7`, the exact line `hmac 8 ok`, `reference 8 ok`, and `text` with a count equal to the number of text files. Proof for HMAC is a pytest summary with no `N failed` clause, `hmac 8 ok` in `node-napi.log`, the exact line `hmac 8 ok` in `cross-language-agreement.log`, and `test reference::reference_vectors ... ok` in `cargo-test.log`. A mixed pytest summary such as `1 failed, 17 passed` is `FAIL`. Proof for a reserved feature is a `NOT_IMPLEMENTED` line, not a skipped `PASS`.
+
+`verify.sh` unsets `CARGO_TARGET_DIR` and points it at this checkout's `target/`. It deletes stale `*cp39-abi3*.whl` files before the maturin build and installs the wheel path printed by that build. It does not glob `$REPO_ROOT/target/wheels` blindly.
 
 `summary.txt` and `summary.tsv` in the evidence directory are the pass/fail table. Keep them. Cleanup must not delete that directory.
 
@@ -121,4 +123,4 @@ Layout check for this skill:
 .cursor/skills/verify-agent-receipts/scripts/check-layout.sh
 ```
 
-`scripts/agree.py`, `scripts/dump_canonicalize.rs`, and `scripts/dump_canonicalize.cjs` are used by `verify.sh`. Do not invoke them as a substitute for the full drive.
+`scripts/agree.py`, `scripts/dump_canonicalize.rs`, `scripts/dump_canonicalize.cjs`, `scripts/dump_hmac.rs`, `scripts/dump_hmac.py`, and `scripts/dump_hmac.cjs` are used by `verify.sh`. `scripts/hmac-surface.sh` holds the HMAC log predicates. `scripts/prove-hmac-surface.sh` is the negative proof for those predicates. Do not invoke the helpers as a substitute for the full drive.

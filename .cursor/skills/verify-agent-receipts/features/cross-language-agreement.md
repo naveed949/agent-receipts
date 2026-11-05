@@ -7,13 +7,14 @@ Rust, Python, and Node produce the same canonical hex and the same `stableHash` 
 - `agree-reference` requires identical canonical hex and `stableHash` from Rust, Python, and Node, matching the reference row.
 - `agree-reject` requires `type_error` from Python and Node for each child of the reference rejection row.
 - `agree-text` requires identical Rust and Python results for every `vectors/text` file, and prints `text <name> rust-python ok`.
-- `agree-pending` prints each still-pending kind and requires `pending 7`, `hmac 8 ok`, and `reference 8 ok`.
+- `agree-pending` prints each still-pending kind and requires `pending 7`, the exact line `hmac 8 ok`, and `reference 8 ok`.
+- `agree-hmac` drives every HMAC subcase — including uppercase, null, missing integrity, and every `v2Mutations` / `v1Mutations` label — through Rust, Python, and Node dumps and requires identical output lines.
 - `agree-toolchain` fails closed if the Python wheel or Node addon is not importable.
 
 ## How to get to it (user POV)
 
 - Compare `canonical_json` and `stable_hash` on one value in each language.
-- Run `scripts/verify.sh`, which builds a Rust dump, runs the Node dump, and compares them with the installed Python module as the `cross-language-agreement` surface.
+- Run `scripts/verify.sh`, which builds the Rust canonicalize and HMAC dumps, runs the Node dumps, and compares them with the installed Python module and `dump_hmac.py` as the `cross-language-agreement` surface.
 
 ## Driving it with verify.sh
 

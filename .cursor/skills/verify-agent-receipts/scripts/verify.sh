@@ -5,6 +5,11 @@ set -o pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SKILL_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 REPO_ROOT=$(cd "$SKILL_DIR/../../.." && pwd)
+# shellcheck source=hmac-surface.sh
+. "$SCRIPT_DIR/hmac-surface.sh"
+
+unset CARGO_TARGET_DIR
+export CARGO_TARGET_DIR="$REPO_ROOT/target"
 
 MODE=run
 EVIDENCE_OVERRIDE=""
@@ -192,16 +197,16 @@ record_hmac() {
     record hmac-verification FAIL "rust reference_vectors not ok; see $cargo_log"
     return
   fi
-  if [[ ! -f "$py_log" ]] || ! grep -qE '[0-9]+ passed' "$py_log"; then
-    record hmac-verification FAIL "python pytest passed line missing; see $py_log"
+  if ! python_log_hmac_ok "$py_log"; then
+    record hmac-verification FAIL "python pytest did not report a zero-failure passed run; see $py_log"
     return
   fi
-  if [[ ! -f "$node_log" ]] || ! grep -q 'hmac 8 ok' "$node_log"; then
+  if [[ ! -f "$node_log" ]] || ! grep -Eq '^#? ?hmac 8 ok$' "$node_log"; then
     record hmac-verification FAIL "node hmac 8 ok missing; see $node_log"
     return
   fi
-  if [[ ! -f "$EVIDENCE/cross-language-agreement.log" ]] || ! grep -q 'hmac 8 ok' "$EVIDENCE/cross-language-agreement.log"; then
-    record hmac-verification FAIL "agreement hmac 8 ok missing; see $EVIDENCE/cross-language-agreement.log"
+  if ! agreement_hmac_ok "$EVIDENCE/cross-language-agreement.log"; then
+    record hmac-verification FAIL "agreement missing exact hmac 8 ok; see $EVIDENCE/cross-language-agreement.log"
     return
   fi
   record hmac-verification PASS "rust python node hmac 8 ok"
@@ -277,16 +282,19 @@ run_python_surface() {
   local logf=$EVIDENCE/python-abi3.log
   (
     set -euo pipefail
+    unset CARGO_TARGET_DIR
+    export CARGO_TARGET_DIR="$REPO_ROOT/target"
+    rm -f "$REPO_ROOT/target/wheels/"*cp39-abi3*.whl
     echo "+ maturin build --release --manifest-path bindings/python/Cargo.toml --interpreter python3"
-    maturin build --release --manifest-path "$REPO_ROOT/bindings/python/Cargo.toml" --interpreter python3
-    mapfile -t wheels < <(find "$REPO_ROOT/target/wheels" -name '*cp39-abi3*.whl' -type f | sort)
-    if [[ ${#wheels[@]} -ne 1 ]]; then
-      echo "expected exactly one cp39-abi3 wheel, found ${#wheels[@]}" >&2
-      printf '%s\n' "${wheels[@]}" >&2
+    out=$(maturin build --release --manifest-path "$REPO_ROOT/bindings/python/Cargo.toml" --interpreter python3 2>&1)
+    printf '%s\n' "$out"
+    wheel=$(printf '%s\n' "$out" | grep -oE '/[^[:space:]]+cp39-abi3[^[:space:]]+\.whl' | tail -1)
+    if [[ -z "$wheel" || ! -f "$wheel" ]]; then
+      echo "maturin did not report a wheel path for this build" >&2
       exit 1
     fi
-    echo "+ pip install ${wheels[0]}"
-    pip_install=(install --disable-pip-version-check --force-reinstall "${wheels[0]}")
+    echo "+ pip install $wheel"
+    pip_install=(install --disable-pip-version-check --force-reinstall "$wheel")
     if [[ "$python" == "python3" ]]; then
       pip_install+=( --user )
     fi
@@ -312,6 +320,7 @@ run_node_surface() {
 build_rust_dump() {
   local dump_dir=$EVIDENCE/dump-canonicalize
   local dump_bin=$dump_dir/target/debug/dump-canonicalize
+  local hmac_bin=$dump_dir/target/debug/dump-hmac
   mkdir -p "$dump_dir/src"
   cat >"$dump_dir/Cargo.toml" <<EOF
 [package]
@@ -322,17 +331,27 @@ publish = false
 
 [workspace]
 
+[[bin]]
+name = "dump-canonicalize"
+path = "src/dump_canonicalize.rs"
+
+[[bin]]
+name = "dump-hmac"
+path = "src/dump_hmac.rs"
+
 [dependencies]
 agent-receipts = { path = "$REPO_ROOT/crates/core" }
+serde_json = "1"
 EOF
-  cp "$SCRIPT_DIR/dump_canonicalize.rs" "$dump_dir/src/main.rs"
-  rm -f "$dump_bin"
+  cp "$SCRIPT_DIR/dump_canonicalize.rs" "$dump_dir/src/dump_canonicalize.rs"
+  cp "$SCRIPT_DIR/dump_hmac.rs" "$dump_dir/src/dump_hmac.rs"
+  rm -f "$dump_bin" "$hmac_bin"
   if ! cargo build --manifest-path "$dump_dir/Cargo.toml" --target-dir "$dump_dir/target"; then
     echo "dump-canonicalize cargo build failed" >&2
     return 1
   fi
-  if [[ ! -x "$dump_bin" ]]; then
-    echo "dump-canonicalize binary missing at $dump_bin" >&2
+  if [[ ! -x "$dump_bin" || ! -x "$hmac_bin" ]]; then
+    echo "dump binaries missing under $dump_dir/target/debug" >&2
     return 1
   fi
 }
@@ -354,7 +373,10 @@ run_agreement() {
       --text "$REPO_ROOT/vectors/text" \
       --rust-dump "$dump_bin" \
       --node-binding "$REPO_ROOT/bindings/node" \
-      --node-dump "$SCRIPT_DIR/dump_canonicalize.cjs"
+      --node-dump "$SCRIPT_DIR/dump_canonicalize.cjs" \
+      --rust-hmac-dump "$EVIDENCE/dump-canonicalize/target/debug/dump-hmac" \
+      --python-hmac-dump "$SCRIPT_DIR/dump_hmac.py" \
+      --node-hmac-dump "$SCRIPT_DIR/dump_hmac.cjs"
   ) >"$logf" 2>&1
 }
 

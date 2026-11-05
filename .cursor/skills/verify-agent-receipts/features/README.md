@@ -45,7 +45,7 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Python abi3 wheel](./python-abi3.md) covers the `cp39-abi3` wheel and pytest against that wheel.
 - [Node napi binding](./node-napi.md) covers `napi build` and the Node reference tests.
 - [Cross-language agreement](./cross-language-agreement.md) covers Rust, Python, and Node on the reference rows, and Rust and Python on `vectors/text`.
-- [HMAC verification](./hmac-verification.md) covers audit-receipt verify and resign, controlled integrity, and the eight HMAC reference rows.
+- [HMAC verification](./hmac-verification.md) covers audit-receipt verify and resign, controlled integrity, the eight HMAC reference rows, and the v1 `gondolinHttps` ban.
 - [Authority-contract comparison](./authority-contract-comparison.md) is not yet implemented.
 - [Async streaming verifier](./async-streaming-verifier.md) is not yet implemented.
 - [Benchmarks](./benchmarks.md) are not yet implemented.
