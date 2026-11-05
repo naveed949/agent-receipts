@@ -45,4 +45,4 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-The entry points are `canonical_json` and `stable_hash` in Rust and Python, and `canonicalJson` and `stableHash` in Node. The behavior is [Canonical JSON](docs/spec/canonical-json.md). The reasons for the format are in [Decisions](docs/DECISIONS.md).
+The entry points are `canonical_json` and `stable_hash` in Rust and Python, and `canonicalJson` and `stableHash` in Node. Audit receipts use `verify_audit_receipt` and `resign_audit_receipt` (Node: `verifyAuditReceipt`, `resignAuditReceipt`). Controlled integrity uses `verify_controlled_integrity` and `sign_controlled_integrity` (Node: `verifyControlledIntegrity`, `signControlledIntegrity`). The behavior is [Canonical JSON](docs/spec/canonical-json.md) and [HMAC integrity](docs/spec/hmac.md). The reasons for the format are in [Decisions](docs/DECISIONS.md).
