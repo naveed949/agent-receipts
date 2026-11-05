@@ -1536,9 +1536,7 @@ function cpuModel(): string {
     if (line) {
       return line.split(":").slice(1).join(":").trim();
     }
-  } catch {
-    // /proc/cpuinfo is absent outside Linux. Fall through to the Node view.
-  }
+  } catch {}
   return cpus()[0]?.model ?? "unknown";
 }
 
