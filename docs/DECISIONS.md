@@ -10,7 +10,7 @@ The Python build produces one `cp39-abi3` wheel. That wheel loads on CPython 3.9
 
 ## Two vector directories
 
-`vectors/reference/vectors.json` is the file produced by the reference implementation. It is stored as generated. The file has 23 rows. Eight rows have kind `canonicalize` and must match `canonicalUtf8Hex` and `stableHash`. Eight HMAC and linkage rows run in Rust, Python, and Node. The remaining rows are listed once each in `vectors/reference/pending-kinds.txt`. That allowlist is now only `compareAuthorityContracts`. Runners print those rows and count them.
+`vectors/reference/vectors.json` is the file produced by the reference implementation. It is stored as generated. The file has 23 rows. Eight rows have kind `canonicalize` and must match `canonicalUtf8Hex` and `stableHash`. Eight HMAC and linkage rows run in Rust, Python, and Node. Seven rows have kind `compareAuthorityContracts` and run in Rust, Python, and Node. `vectors/reference/pending-kinds.txt` is empty.
 
 `vectors/text` holds byte-level cases. Invalid UTF-8, duplicate keys, and a second pass over canonical bytes still belong there. Node does not read that directory. A JavaScript value cannot represent those byte strings, and Node has no bytes entry.
 
@@ -56,7 +56,7 @@ Node returns a string from `canonicalJson` and `stableHash`. A buffer is `type_e
 
 ## Receipt
 
-`Receipt` is a public struct with a private field and no constructor. Authority-contract comparison and an async streaming verifier stay reserved. HMAC verification is part of this API.
+`Receipt` is a public struct with a private field and no constructor. An async streaming verifier stays reserved. HMAC verification and authority-contract comparison are part of this API.
 
 ## 2026-11-05 HMAC verification
 
@@ -72,7 +72,33 @@ Audit signer length is measured in host units: UTF-16 code units for a string, b
 
 Bindings copy the key into owned bytes, then call Rust. Python and Node do not implement HMAC. After `resign_audit_receipt` returns a `Json` tree, each binding emits canonical JSON and lets the host parser rebuild a value, because the inspectors on `Json` are crate-private.
 
-`compareAuthorityContracts` is still pending.
+## 2026-11-05 Authority-contract comparison
+
+Comparison runs on a typed policy, not on JSON text. `Json` is parsed once at the crate boundary into `AuthorityPolicy`. `Relationship`, `AuthorityPath`, and `AuthorityError` are exhaustive enums. Host strings (`"widening"`, `"filesystem.read"`) are derived from those enums. The eleven paths live in `AuthorityPath::ALL`. That array is the order of `widened` and `narrowed`.
+
+v1 cannot hold `network.https`. v2 cannot hold `network.outbound`. Cross-version compare is `CrossVersion`, not a path-by-path walk that would mix HTTPS with outbound.
+
+HTTPS subset is per method with bounds. Protocol, host, port, resolution, and redirects must match. The covering rule must include the method and must have `maxResponseBytes` and `timeoutMs` at least as large. The fields stay on `HttpsRule` so a test can build two rules that differ in one field and prove that deleting that check fails. Parse still rejects every value except `https`, `public-only`, and `none`.
+
+Fail-closed choices the reference file does not pin:
+
+- A trailing-dot host (`example.com.`) is rejected. It is not folded into the undotted name.
+- An empty DNS label (`a..b.com`) is rejected. `is_ldh` treats an empty label as false so a missing empty-label guard cannot panic.
+- A wildcard host (`*.example.com`) is rejected.
+- A Unicode IDN host is rejected. `xn--` labels are rejected.
+- `protocol`, `resolution`, and `redirects` must be the fixed strings `https`, `public-only`, and `none`. Any other value is `InvalidHttpsShape`, not a comparable grant.
+- Identifier scopes are exact strings. `"docs"` does not grant `"docs/a"`.
+- Ports compare exactly. There is no implicit 443.
+- `userinfo` is not a field. `@` in the host is an invalid host.
+- `is_https_authority_subset` on invalid rules is an error, not `false`.
+- A non-object policy is `NotAnObject`.
+- Bound fields must be positive safe integers.
+
+Bindings copy host values into `Json`, call Rust, and map `AuthorityError` to `TypeError`. Host conversion failures on the authority APIs are also `TypeError`, not the canonicalize exception. Node throws a real `TypeError` (`napi_create_type_error`). Both hosts set `TypeError.code` to the `AuthorityError` code, so `err.code` is `cross_version` rather than the string `"TypeError"`. They do not reimplement subset or validation. Node freezes the compare result and the normalize results. `network.https: false` is an invalid shape, not an empty grant.
+
+The verify dump helpers are diagnostic, but they sit on the same JSON text as `compare_authority_contracts_bytes`. A last-win parse of a duplicate `filesystem.read` can report `unchanged` or `narrowing` while the bytes API returns `invalid_input`. The dumps reject duplicate keys in the input text and print `err invalid_input`. The Rust dump extracts the `previous` and `next` value spans and passes those raw bytes to `compare_authority_contracts_bytes`. It does not round-trip through `serde_json`. Node has no public bytes entry. The dump parser rejects duplicate keys in process and still calls `compareAuthorityContracts` on host objects.
+
+Python and Node round-trip a normalized policy through canonical JSON because `Json` inspectors stay crate-private. The compare result is built from the typed `CompareResult`, not from a JSON round-trip of the policies.
 
 ## 2026-11-05 Key material lifetime
 

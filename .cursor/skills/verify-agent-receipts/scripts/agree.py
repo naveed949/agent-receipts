@@ -27,6 +27,8 @@ def decode_field(field: str) -> bytes:
 
 
 def read_allowlist(path: Path) -> list[str]:
+    if not path.is_file():
+        return []
     lines: list[str] = []
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
@@ -108,6 +110,29 @@ def emit_json(value) -> str:
     raise TypeError(f"cannot emit {type(value).__name__}")
 
 
+def parse_compare_dump(text: str) -> tuple[str, str, str | None]:
+    line = text.strip()
+    if line.startswith("ok "):
+        return ("ok", line[3:].strip(), None)
+    if line.startswith("err "):
+        return ("err", line[4:].strip(), None)
+    raise ValueError(f"dump output was not ok/err: {text!r}")
+
+
+def run_compare_dump(command: list[str], raw: bytes) -> tuple[str, str, str | None]:
+    completed = subprocess.run(
+        command,
+        input=raw,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        err = completed.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"{command[0]} exited {completed.returncode}: {err}")
+    return parse_compare_dump(completed.stdout.decode("utf-8"))
+
+
 def parse_dump(text: str) -> tuple[str, str, str | None]:
     line = text.strip()
     if line.startswith("ok "):
@@ -169,6 +194,9 @@ def check_reference(
     rust_hmac: list[str],
     python_hmac: list[str],
     node_hmac: list[str],
+    rust_compare: list[str],
+    python_compare: list[str],
+    node_compare: list[str],
 ) -> int:
     root = load_reference(reference / "vectors.json")
     allow = read_allowlist(reference / "pending-kinds.txt")
@@ -176,10 +204,12 @@ def check_reference(
     seen: list[str] = []
     ok = 0
     hmac_ok = 0
+    compare_ok = 0
     failed = 0
     hmac_kinds = ("controlled-integrity", "audit.verifyAuditReceipt")
     catalog = load_hmac_catalog(root["vectors"])
     hmac_dumps = (rust_hmac, python_hmac, node_hmac)
+    compare_dumps = (rust_compare, python_compare, node_compare)
     for row in root["vectors"]:
         name = row.get("name")
         kind = row.get("kind")
@@ -208,6 +238,17 @@ def check_reference(
                 hmac_ok += 1
                 print(f"hmac {name} ok")
             continue
+        if kind == "compareAuthorityContracts":
+            try:
+                check_compare_row(row, name, compare_dumps)
+            except Exception as err:
+                failed += 1
+                print(f"compare {name} ... FAILED")
+                print(f"  {err}", file=sys.stderr)
+            else:
+                compare_ok += 1
+                print(f"compare {name} rust-python-node ok")
+            continue
         if kind not in allow:
             failed += 1
             print(f"unknown kind {kind}", file=sys.stderr)
@@ -224,12 +265,13 @@ def check_reference(
     if (
         ok != 8
         or hmac_ok != 8
-        or len(pending_lines) != 7
-        or ok + hmac_ok + len(pending_lines) != 23
+        or compare_ok != 7
+        or len(pending_lines) != 0
+        or ok + hmac_ok + compare_ok + len(pending_lines) != 23
     ):
         failed += 1
         print(
-            f"counts canonicalize {ok} hmac {hmac_ok} pending {len(pending_lines)}",
+            f"counts canonicalize {ok} hmac {hmac_ok} compare {compare_ok} pending {len(pending_lines)}",
             file=sys.stderr,
         )
     try:
@@ -239,10 +281,95 @@ def check_reference(
         failed += 1
         print("hmac gondolin-https ... FAILED")
         print(f"  {err}", file=sys.stderr)
+    try:
+        check_compare_duplicate_dumps(compare_dumps)
+        print("compare dump-duplicate-keys rust-python-node ok")
+    except Exception as err:
+        failed += 1
+        print("compare dump-duplicate-keys ... FAILED")
+        print(f"  {err}", file=sys.stderr)
     print(f"pending {len(pending_lines)}")
     print(f"hmac {hmac_ok} ok")
+    print(f"compare {compare_ok} ok")
     print(f"reference {ok} ok")
     return failed
+
+
+def check_compare_row(row, name: str, dumps: tuple[list[str], list[str], list[str]]) -> None:
+    has_expected = "expected" in row
+    has_error = "expectedError" in row
+    if has_expected == has_error:
+        raise ValueError("needs expected or expectedError")
+    if has_expected:
+        check_compare_case(
+            name,
+            {"previous": row["input"]["previous"], "next": row["input"]["next"]},
+            dumps,
+            row["expected"],
+        )
+        return
+    cases = row["input"]["cases"]
+    expected_error = row["expectedError"]
+    if set(cases) != set(expected_error):
+        raise ValueError(f"{name} rejection keys")
+    for label, child in cases.items():
+        spec = expected_error[label]
+        if spec.get("type") != "TypeError":
+            raise ValueError(f"{name} {label} type {spec.get('type')}")
+        check_compare_case(f"{name} {label}", child, dumps, None)
+
+
+COMPARE_DUP_SECRET_THEN_EMPTY = (
+    b'{"previous":{"filesystem":{"read":["/public"]}},'
+    b'"next":{"filesystem":{"read":["/secret","/public"],"read":[]}}}'
+)
+COMPARE_DUP_ADMIN_THEN_MATCH = (
+    b'{"previous":{"filesystem":{"read":["/public"]}},'
+    b'"next":{"filesystem":{"read":["/admin"],"read":["/public"]}}}'
+)
+
+
+def check_compare_duplicate_dumps(dumps: tuple[list[str], list[str], list[str]]) -> None:
+    cases = (
+        ("dump-dup-secret-then-empty", COMPARE_DUP_SECRET_THEN_EMPTY),
+        ("dump-dup-admin-then-match", COMPARE_DUP_ADMIN_THEN_MATCH),
+    )
+    for name, raw in cases:
+        rust = run_compare_dump(dumps[0], raw)
+        python = run_compare_dump(dumps[1], raw)
+        node = run_compare_dump(dumps[2], raw)
+        if rust != python or rust != node:
+            raise ValueError(f"{name} language mismatch rust={rust} python={python} node={node}")
+        if rust != ("err", "invalid_input", None):
+            raise ValueError(f"{name} expected invalid_input got {rust}")
+
+
+def check_compare_case(
+    name: str,
+    payload: dict,
+    dumps: tuple[list[str], list[str], list[str]],
+    expected,
+) -> None:
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    rust = run_compare_dump(dumps[0], raw)
+    python = run_compare_dump(dumps[1], raw)
+    node = run_compare_dump(dumps[2], raw)
+    if rust != python or rust != node:
+        raise ValueError(f"{name} language mismatch rust={rust} python={python} node={node}")
+    if expected is None:
+        if rust != ("err", "TypeError", None):
+            raise ValueError(f"{name} expected TypeError got {rust}")
+        return
+    if rust[0] != "ok":
+        raise ValueError(f"{name} expected ok got {rust}")
+    got = json.loads(rust[1])
+    if got.get("relationship") != expected["relationship"]:
+        raise ValueError(f"{name} relationship {got.get('relationship')}")
+    if list(got.get("widened")) != list(expected["widened"]):
+        raise ValueError(f"{name} widened {got.get('widened')}")
+    if list(got.get("narrowed")) != list(expected["narrowed"]):
+        raise ValueError(f"{name} narrowed {got.get('narrowed')}")
+
 
 
 def check_canonicalize_row(row, name: str, rust_cmd: list[str], node_cmd: list[str]) -> None:
@@ -847,14 +974,28 @@ def main() -> int:
     parser.add_argument("--rust-hmac-dump", required=True)
     parser.add_argument("--python-hmac-dump", required=True)
     parser.add_argument("--node-hmac-dump", required=True)
+    parser.add_argument("--rust-compare-dump", required=True)
+    parser.add_argument("--python-compare-dump", required=True)
+    parser.add_argument("--node-compare-dump", required=True)
     args = parser.parse_args()
     rust_cmd = [args.rust_dump]
     node_cmd = ["node", args.node_dump, args.node_binding]
     rust_hmac = [args.rust_hmac_dump]
     python_hmac = [sys.executable, args.python_hmac_dump]
     node_hmac = ["node", args.node_hmac_dump, args.node_binding]
+    rust_compare = [args.rust_compare_dump]
+    python_compare = [sys.executable, args.python_compare_dump]
+    node_compare = ["node", args.node_compare_dump, args.node_binding]
     failed = check_reference(
-        args.reference, rust_cmd, node_cmd, rust_hmac, python_hmac, node_hmac
+        args.reference,
+        rust_cmd,
+        node_cmd,
+        rust_hmac,
+        python_hmac,
+        node_hmac,
+        rust_compare,
+        python_compare,
+        node_compare,
     )
     failed += check_text(args.text, rust_cmd)
     if failed:

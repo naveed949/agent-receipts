@@ -1,31 +1,29 @@
 # Reference pending kinds
 
-`vectors/reference/pending-kinds.txt` lists every reference kind that still has no API. Those rows are printed and counted. This checkout implements `canonicalize` and the HMAC kinds. `compareAuthorityContracts` is the remaining pending kind.
+`vectors/reference/pending-kinds.txt` lists every reference kind that still has no API. This checkout implements `canonicalize`, the HMAC kinds, and `compareAuthorityContracts`. The file is empty.
 
 ## Sub-features
 
-- `pending-listed` requires the allowlist file, one kind per line, with no duplicate and no `canonicalize` line.
-- `pending-printed` requires each kind in the file to appear on a `pending` line from the reference runner.
-- `pending-absent` confirms the kind strings are not present under `crates/core/src` or the binding sources and tests.
+- `pending-listed` requires the allowlist file to exist.
+- `pending-empty` requires the file to contain no kind names.
 
 ## How to get to it (user POV)
 
-- There is no user entry point. The reference file carries the rows. `docs/DECISIONS.md` says `compareAuthorityContracts` is not implemented.
+- There is no pending kind. Every row in `vectors/reference/vectors.json` has an API.
 
 ## Driving it with verify.sh
 
 Preconditions:
 
-- `scripts/verify.sh doctor` has been run. Doctor does not make these kinds exist.
+- `scripts/verify.sh doctor` has been run.
 - `vectors/reference/pending-kinds.txt` exists.
 
-- **Record absence.** Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh`. The `reference-pending-kinds` row is `NOT_IMPLEMENTED` with `compareAuthorityContracts has no API`.
-- **Stale skill.** If one of those kind strings appears in the core or the binding sources or tests, the row is `FAIL`. It is still not `PASS`.
-- **Count.** `node-napi.log` and `cross-language-agreement.log` contain `pending 7` and `canonicalize 8 ok` or `reference 8 ok`, plus `hmac 8 ok`. `cargo-test.log` contains `test reference::reference_vectors ... ok`.
-- **Proof.** The summary table shows `NOT_IMPLEMENTED` or `FAIL`. Never `PASS`.
+- **Record emptiness.** Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh`. The `reference-pending-kinds` row is `PASS` with `no pending kinds`.
+- **Stale list.** If the file names a kind that appears in core or binding sources, the row is `FAIL`.
+- **Count.** `node-napi.log` and `cross-language-agreement.log` contain `pending 0`, `canonicalize 8 ok` or `reference 8 ok`, `hmac 8 ok`, and `compare 7 ok`.
+- **Proof.** The summary table shows `PASS`. Never `NOT_IMPLEMENTED`.
 
 ## Gotchas
 
-- A passing canonicalize or HMAC row is not this kind.
-- Do not hardcode the kind names in binding tests. The runners print `kind` from the file.
-- Do not mark this passed because `canonical_json` or HMAC verify succeeded.
+- Do not treat an empty allowlist as a missing file. The file must exist.
+- Do not mark this passed because canonicalize or HMAC tests passed while a kind remains listed.

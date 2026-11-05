@@ -26,8 +26,8 @@ Preconditions:
 - `vectors/text` contains the JSON files named by the Rust vector runner.
 
 - **Rust cases.** Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh`. The `cargo-test` row is `PASS`. `cargo-test.log` contains `running 9 vector cases` and `test reference::reference_vectors ... ok`.
-- **Python cases.** Read `python-abi3.log`. pytest exits 0. The reference test checks the captured `pending 7`, `canonicalize 8 ok`, and `hmac 8 ok` lines.
-- **Node cases.** Read `node-napi.log`. It contains `pending 7`, `canonicalize 8 ok`, and `hmac 8 ok`.
+- **Python cases.** Read `python-abi3.log`. pytest exits 0. The reference test checks the captured `pending 0`, `canonicalize 8 ok`, `hmac 8 ok`, and `compare 7 ok` lines.
+- **Node cases.** Read `node-napi.log`. It contains `pending 0`, `canonicalize 8 ok`, `hmac 8 ok`, and `compare 7 ok`.
 - **Proof.** The `cross-language-agreement` row is `PASS`. Success rows are `rust-python-node ok`. Text files are `rust-python ok`.
 
 ## Gotchas

@@ -24,6 +24,18 @@ else
   printf 'PROOF (a) PASS: mixed summary rejected by hmac-surface.sh\n'
 fi
 
+skipped=$PROOF_DIR/skipped-python.log
+cat >"$skipped" <<'EOF'
+=========================== 19 passed, 1 skipped in 0.07s ============================
+EOF
+printf 'PROOF (c) input: %s\n' "$(cat "$skipped")"
+if python_log_hmac_ok "$skipped"; then
+  printf 'PROOF (c) PASS: skipped pytest summary accepted by hmac-surface.sh\n'
+else
+  printf 'PROOF (c) FAIL: skipped summary was rejected\n'
+  failed=1
+fi
+
 SKILL_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 REPO_ROOT=$(cd "$SKILL_DIR/../../.." && pwd)
 ALIEN=$PROOF_DIR/alien-target

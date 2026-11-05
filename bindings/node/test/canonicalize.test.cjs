@@ -6,7 +6,11 @@ const test = require("node:test");
 const {
   auditSigningKey,
   canonicalJson,
+  compareAuthorityContracts,
   controlledSigningKey,
+  isHttpsAuthoritySubset,
+  normalizeAuthorityPolicy,
+  normalizeHttpsAuthorityRules,
   resignAuditReceipt,
   signControlledIntegrity,
   stableHash,
@@ -70,6 +74,7 @@ test("reference vectors", () => {
   const seen = [];
   let canonicalOk = 0;
   let hmacOk = 0;
+  let compareOk = 0;
   const failures = [];
   for (const row of rows) {
     const name = requireString(row, "name", failures);
@@ -95,6 +100,15 @@ test("reference vectors", () => {
       }
       continue;
     }
+    if (kind === "compareAuthorityContracts") {
+      try {
+        checkCompare(row, name);
+        compareOk += 1;
+      } catch (err) {
+        failures.push(`${name} ${err.message}`);
+      }
+      continue;
+    }
     if (!allow.includes(kind)) {
       failures.push(`unknown kind ${kind}`);
       continue;
@@ -112,11 +126,12 @@ test("reference vectors", () => {
   if (
     canonicalOk !== 8 ||
     hmacOk !== 8 ||
-    pendingLines.length !== 7 ||
-    canonicalOk + hmacOk + pendingLines.length !== 23
+    compareOk !== 7 ||
+    pendingLines.length !== 0 ||
+    canonicalOk + hmacOk + compareOk + pendingLines.length !== 23
   ) {
     failures.push(
-      `counts canonicalize ${canonicalOk} hmac ${hmacOk} pending ${pendingLines.length}`,
+      `counts canonicalize ${canonicalOk} hmac ${hmacOk} compare ${compareOk} pending ${pendingLines.length}`,
     );
   }
   for (const line of pendingLines) {
@@ -125,7 +140,37 @@ test("reference vectors", () => {
   console.log(`pending ${pendingLines.length}`);
   console.log(`canonicalize ${canonicalOk} ok`);
   console.log(`hmac ${hmacOk} ok`);
+  console.log(`compare ${compareOk} ok`);
   assert.deepEqual(failures, []);
+});
+
+test("https helpers call rust", () => {
+  const split = [
+    httpsRule("api.example.com", ["GET"]),
+    httpsRule("api.example.com", ["HEAD"]),
+  ];
+  const merged = [httpsRule("API.example.com", ["HEAD", "GET"])];
+  assert.equal(isHttpsAuthoritySubset(split, merged), true);
+  assert.equal(isHttpsAuthoritySubset(merged, split), true);
+  normalizeHttpsAuthorityRules(split);
+  normalizeAuthorityPolicy({ version: "2", network: { https: split } });
+  const frozen = compareAuthorityContracts(
+    { filesystem: { read: ["a"] } },
+    { filesystem: { read: ["a", "b"] } },
+  );
+  assert.equal(Object.isFrozen(frozen), true);
+  assert.equal(Object.isFrozen(frozen.widened), true);
+});
+
+test("compare host rejects are TypeError", () => {
+  assert.throws(
+    () => compareAuthorityContracts(new Date(), {}),
+    (err) => err instanceof TypeError,
+  );
+  assert.throws(
+    () => isHttpsAuthoritySubset(new Map(), []),
+    (err) => err instanceof TypeError,
+  );
 });
 
 test("usage object", () => {
@@ -320,6 +365,53 @@ function requireString(row, field, failures) {
     return null;
   }
   return value;
+}
+
+function checkCompare(row, name) {
+  const hasExpected = Object.prototype.hasOwnProperty.call(row, "expected");
+  const hasError = Object.prototype.hasOwnProperty.call(row, "expectedError");
+  if (hasExpected === hasError) {
+    throw new Error("needs expected or expectedError");
+  }
+  if (hasExpected) {
+    const got = compareAuthorityContracts(row.input.previous, row.input.next);
+    assert.equal(got.relationship, row.expected.relationship, name);
+    assert.deepEqual(got.widened, row.expected.widened, name);
+    assert.deepEqual(got.narrowed, row.expected.narrowed, name);
+    return;
+  }
+  const cases = row.input.cases;
+  const expectedError = row.expectedError;
+  assert.deepEqual(Object.keys(cases).sort(), Object.keys(expectedError).sort(), name);
+  for (const label of Object.keys(cases)) {
+    assert.equal(expectedError[label].type, "TypeError", `${name} ${label}`);
+    assert.throws(
+      () => compareAuthorityContracts(cases[label].previous, cases[label].next),
+      (err) => {
+        if (!(err instanceof TypeError)) {
+          return false;
+        }
+        if (label === "crossVersion") {
+          return err.code === "cross_version";
+        }
+        return true;
+      },
+      `${name} ${label}`,
+    );
+  }
+}
+
+function httpsRule(host, methods) {
+  return {
+    protocol: "https",
+    host,
+    port: 443,
+    methods,
+    resolution: "public-only",
+    redirects: "none",
+    maxResponseBytes: 1024,
+    timeoutMs: 1000,
+  };
 }
 
 function checkCanonicalize(row, name) {

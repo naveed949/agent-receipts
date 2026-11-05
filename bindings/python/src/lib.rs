@@ -5,8 +5,8 @@ use pyo3::types::{
 };
 
 use receipts::{
-    Error, Json, SignerError, SigningKey, Wtf16, AUDIT_RECEIPT_V2_VERSION, AUDIT_RECEIPT_VERSION,
-    CONTROLLED_INTEGRITY_VERSION,
+    AuthorityError, AuthorityPath, CompareResult, Error, Json, SignerError, SigningKey, Wtf16,
+    AUDIT_RECEIPT_V2_VERSION, AUDIT_RECEIPT_VERSION, CONTROLLED_INTEGRITY_VERSION,
 };
 
 pyo3::create_exception!(agent_receipts, CanonicalizeError, PyException);
@@ -321,6 +321,93 @@ fn json_loads(py: Python<'_>, bytes: Vec<u8>) -> PyResult<Py<PyAny>> {
     Ok(json.call_method1("loads", (text,))?.unbind())
 }
 
+#[pyfunction]
+fn compare_authority_contracts(
+    py: Python<'_>,
+    previous: &Bound<'_, PyAny>,
+    next: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let previous = read_value(previous).map_err(|err| authority_host_error(py, err))?;
+    let next = read_value(next).map_err(|err| authority_host_error(py, err))?;
+    let result = py
+        .detach(move || receipts::compare_authority_contracts(&previous, &next))
+        .map_err(|err| authority_error(py, err))?;
+    compare_to_py(py, result)
+}
+
+#[pyfunction]
+fn normalize_authority_policy(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let tree = read_value(value).map_err(|err| authority_host_error(py, err))?;
+    let normalized = py
+        .detach(move || {
+            receipts::normalize_authority_policy(&tree).and_then(|value| {
+                receipts::canonical_json_value(&value).map_err(|_| AuthorityError::InvalidInput)
+            })
+        })
+        .map_err(|err| authority_error(py, err))?;
+    json_loads(py, normalized)
+}
+
+#[pyfunction]
+fn normalize_https_authority_rules(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let tree = read_value(value).map_err(|err| authority_host_error(py, err))?;
+    let normalized = py
+        .detach(move || {
+            receipts::normalize_https_authority_rules(&tree).and_then(|value| {
+                receipts::canonical_json_value(&value).map_err(|_| AuthorityError::InvalidInput)
+            })
+        })
+        .map_err(|err| authority_error(py, err))?;
+    json_loads(py, normalized)
+}
+
+#[pyfunction]
+fn is_https_authority_subset(
+    py: Python<'_>,
+    inner: &Bound<'_, PyAny>,
+    outer: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    let inner = read_value(inner).map_err(|err| authority_host_error(py, err))?;
+    let outer = read_value(outer).map_err(|err| authority_host_error(py, err))?;
+    py.detach(move || receipts::is_https_authority_subset(&inner, &outer))
+        .map_err(|err| authority_error(py, err))
+}
+
+fn compare_to_py(py: Python<'_>, result: CompareResult) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("relationship", result.relationship.as_str())?;
+    dict.set_item("widened", path_names(py, &result.widened)?)?;
+    dict.set_item("narrowed", path_names(py, &result.narrowed)?)?;
+    Ok(dict.into_any().unbind())
+}
+
+fn path_names(py: Python<'_>, paths: &[AuthorityPath]) -> PyResult<Py<PyList>> {
+    let items: Vec<&str> = paths.iter().map(|path| path.as_str()).collect();
+    Ok(PyList::new(py, items)?.unbind())
+}
+
+fn authority_error(py: Python<'_>, err: AuthorityError) -> PyErr {
+    type_error_with_code(py, err.code())
+}
+
+fn authority_host_error(py: Python<'_>, err: Fail) -> PyErr {
+    match err {
+        Fail::Domain(err) => type_error_with_code(py, err.code()),
+        Fail::Python(err) => err,
+    }
+}
+
+fn type_error_with_code(py: Python<'_>, code: &'static str) -> PyErr {
+    let raised = PyTypeError::new_err(code);
+    match raised.value(py).setattr("code", code) {
+        Ok(()) => raised,
+        Err(set_err) => set_err,
+    }
+}
+
 fn signer_error(err: SignerError) -> PyErr {
     match err {
         SignerError::ShortAuditKey => {
@@ -352,6 +439,10 @@ fn agent_receipts(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(sign_controlled_integrity, module)?)?;
     module.add_function(wrap_pyfunction!(audit_signing_key, module)?)?;
     module.add_function(wrap_pyfunction!(controlled_signing_key, module)?)?;
+    module.add_function(wrap_pyfunction!(compare_authority_contracts, module)?)?;
+    module.add_function(wrap_pyfunction!(normalize_authority_policy, module)?)?;
+    module.add_function(wrap_pyfunction!(normalize_https_authority_rules, module)?)?;
+    module.add_function(wrap_pyfunction!(is_https_authority_subset, module)?)?;
     module.add("AUDIT_RECEIPT_VERSION", AUDIT_RECEIPT_VERSION)?;
     module.add("AUDIT_RECEIPT_V2_VERSION", AUDIT_RECEIPT_V2_VERSION)?;
     module.add("CONTROLLED_INTEGRITY_VERSION", CONTROLLED_INTEGRITY_VERSION)?;
