@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Time the installed agent_receipts wheel. Plan on stdin, reply on stdout."""
 
 import json
 import sys

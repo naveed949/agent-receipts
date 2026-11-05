@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Predicates for the latency log and the Cargo bench tripwire.
 
 benchmarks_log_ok() {
   local log=$1
