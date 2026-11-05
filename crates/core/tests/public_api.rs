@@ -1,3 +1,5 @@
+use sha2::{Digest, Sha256};
+
 use agent_receipts::{
     audit_mac_input_ascii, audit_signing_key, canonical_json, canonical_json_value, check_depth,
     compare_authority_contracts, compare_authority_contracts_bytes, controlled_signing_key,
@@ -158,4 +160,18 @@ fn signing_key_variants_are_exhaustive() {
             }
         }
     }
+}
+
+#[test]
+fn reference_vectors_sha256_is_pinned() {
+    let bytes = include_bytes!("../../../vectors/reference/vectors.json");
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    assert_eq!(
+        hex, "70507a2b636c05bf9841cb99921ff91908cd5e2ab7e270b14802f32727bbb7c1",
+        "vectors/reference/vectors.json sha256"
+    );
 }
