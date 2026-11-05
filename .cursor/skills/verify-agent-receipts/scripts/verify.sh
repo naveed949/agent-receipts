@@ -377,6 +377,8 @@ run_python_surface() {
 run_node_surface() {
   local logf=$EVIDENCE/node-napi.log
   (
+    set -euo pipefail
+    unset NAPI_RS_NATIVE_LIBRARY_PATH
     cd "$REPO_ROOT/bindings/node"
     echo "+ npm ci"
     npm ci

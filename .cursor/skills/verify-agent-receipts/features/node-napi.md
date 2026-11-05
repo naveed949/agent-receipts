@@ -28,4 +28,5 @@ Preconditions:
 
 - `index.js`, `index.d.ts`, and `*.node` are generated. They are gitignored. Tests require a successful build in this tree.
 - Node major versions other than 22 fail doctor. Do not relax that pin to make the surface pass.
-- The tests `require("..")`, which is the built addon, not a pure JavaScript rewrite.
+- The tests `require("..")`, which is the built addon, not a pure JavaScript rewrite. `verify.sh` unsets `NAPI_RS_NATIVE_LIBRARY_PATH` so that load cannot pick an out-of-tree `.node` file.
+- `npm ci` and `npm run build` run with `set -e` in the same subshell as `npm test`. A failed install or build is a `FAIL` row, even if a previous addon would have made `npm test` exit 0.

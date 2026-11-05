@@ -1530,13 +1530,20 @@ function commandText(command: string, args: readonly string[]): string {
 }
 
 function cpuModel(): string {
-  try {
-    const text = readFileSync("/proc/cpuinfo", "utf8");
-    const line = text.split("\n").find((item) => item.startsWith("model name"));
-    if (line) {
-      return line.split(":").slice(1).join(":").trim();
+  if (process.platform === "linux") {
+    try {
+      const text = readFileSync("/proc/cpuinfo", "utf8");
+      const line = text.split("\n").find((item) => item.startsWith("model name"));
+      if (line) {
+        return line.split(":").slice(1).join(":").trim();
+      }
+    } catch (err) {
+      const code = typeof err === "object" && err !== null && "code" in err ? (err as { code: unknown }).code : undefined;
+      if (code !== "ENOENT") {
+        throw err;
+      }
     }
-  } catch {}
+  }
   return cpus()[0]?.model ?? "unknown";
 }
 
