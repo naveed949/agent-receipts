@@ -1,5 +1,6 @@
 /target
 /bench/rust-native/target
+/bench/results/full.dirty.json
 **/*.rs.bk
 .venv/
 __pycache__/

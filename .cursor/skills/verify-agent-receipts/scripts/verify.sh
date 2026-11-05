@@ -286,7 +286,7 @@ record_benchmarks() {
     return
   fi
   if ! benchmarks_entry_present "$REPO_ROOT"; then
-    record benchmarks NOT_IMPLEMENTED "no benches on this checkout"
+    record benchmarks NOT_IMPLEMENTED "no bench/run on this checkout"
     return
   fi
   local logf=$EVIDENCE/benchmarks.log
