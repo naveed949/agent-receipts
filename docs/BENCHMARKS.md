@@ -76,7 +76,7 @@ A native call on the small vector can take a few hundred nanoseconds. Part of th
 
 The result of each call is a new string, boolean, or object. The loop does not collect on purpose. A later iteration can still hit a collection that the runtime schedules. That shows up in the spread. It is not a step of the plan. The results file records `gcInTimedRegion` as false for that reason.
 
-Shared machines add their own noise. Other processes, frequency changes, and a wide CPU mask move p95. Full pins one CPU when `taskset` exists so the spread is process noise rather than cores competing. The committed file is one run on one machine. The bench workflow runs only smoke, on a shared runner, and a failure there does not block the other checks.
+Shared machines add their own noise. Other processes, frequency changes, and a wide CPU mask move p95. Full pins one CPU when `taskset` exists. The spread then includes a fresh process and its JIT on every repeat. The committed file is one run on one machine. The bench workflow runs only smoke, on a shared runner, and a failure there does not block the other checks.
 
 p95 spread is the max minus the min of the per-run p95. The printed p50, p95, p99, and mean come from the run whose p50 is the median p50. Samples from different processes are not pooled. When that spread is wider than 15% of the median p95, and each run has at least 400 samples, the command prints `unstable` plus the operation, the case, and the implementation. The process still exits 0. The 524288 byte rows have 80 samples, so they do not print `unstable` even when they move.
 
@@ -98,12 +98,20 @@ The object tree mixes canonical index keys such as `"2"` and `"10"` with other s
 
 ## Checklist for the committed file
 
-The answers below belong to `bench/results/full.json`. Smoke is not this checklist.
+`bench/results/full.json` is one full run on 5 November 2026. The machine was an Intel Xeon, Linux 6.12.94+, x64, Node v22.23.4, CPython 3.12.3, rustc 1.83.0. The wheel, the addon, and `agent-receipts-bench-native` were release builds. `taskset` pinned the run to CPU 0. Load average before the run was 0.00, 0.06, 0.06. Git SHA `4910d8914a09f8f72f506767785c795de567d9cf`, clean worktree. Five processes per implementation. Wall time was about five minutes. Smoke is not this checklist.
 
-1. **Limiter.** Filled from a profiled run that is not the committed file. A cell with no named limiter is marked unexplained.
-2. **Tuning.** The wheel, the addon, and the Rust binary are release builds. `cargoProfile` in the file is `release`.
-3. **Limits.** One pinned CPU. A sample cannot do more work than one core can retire in that interval.
-4. **Errors.** A probe that disagrees with the TypeScript baseline, or a verify result other than true, aborts the command before it writes the file.
-5. **Spread.** Five processes per implementation. The file stores every sample. The table prints p95 spread.
-6. **Does it matter.** These calls are the public API a host waits on. There is no larger request around them in this repository.
-7. **Did the work happen.** The observation is inside the clock, and the probe must match before the samples are kept.
+1. **Limiter.** During the run, `ps` showed the TypeScript runner at 99.8% CPU and the Python runner at 99.5% CPU on the pinned core. A separate `node --cpu-prof` loop, not the committed file, called `canonicalJson` on a 1500-key object. 86.7% of samples sat in that call and 2.4% sat in garbage collection. A TypeScript profile of the same shape landed in `emitString`, `emitObject`, `copyPlain`, and `define` in `bench/ts-baseline/host.ts`. The addon-internal split of `Host::load`, the walk, and the Rust emit was not symbolized. `perf` is not installed on this machine. The large canonicalize rows are one busy core. Native p50 on the 524288 byte tree is 1.54 ms. Node is 22.2 ms, Python 25.1 ms, and TypeScript 27.5 ms, with p50 spread under 3% on each. The native row is the emit. The host rows add the walk on that same core.
+2. **Tuning.** `cargoProfile` is `release`. The Python module path is under `site-packages`. The Node file is the release `bindings/node/index.js`. The wheel, the addon, and the Rust binary are all release builds.
+3. **Limits.** 524288 bytes in 1.54 ms is about 340 MB/s of canonical output. That is under what one core can move from memory. The host rows are slower than that, so they are not a memory-bandwidth ceiling. They are more instructions per byte on the same core. Removing the native emit from the Node row would leave about 20 ms, which is the walk, so the walk can account for the gap. It cannot make the Node row faster than the native row.
+4. **Errors.** The command exits before it writes the file if a probe disagrees with the TypeScript baseline, or if verify is anything other than true. This run exited 0. The file has five runs and 68 series in each run.
+5. **Spread.** p50 spread on the 8192, 65536, and 524288 byte canonicalize rows is under 3%, except where a cell is listed as unexplained below. p95 spread on several vector rows is wider than 15% of the median p95, and the command printed `unstable` for those rows. A gap smaller than that spread is not a difference.
+6. **Does it matter.** These calls are the public API. This repository has no surrounding server request. The number is the call the host waits on.
+7. **Did the work happen.** Samples were kept only after the probe matched. The profiled napi loop observed a canonical string of length 30412, so the emit produced bytes. Verify rows in the file are `true` on every implementation, including `rust_native`.
+
+Cells this run does not explain.
+
+- Vector p95 values that printed `unstable`. Those samples are a few microseconds, and the spread is the same size as the clock plus a runtime tail. Read p50 there, and treat even that p50 as the call plus the timer.
+- `canonical_json` p95 at 524288 bytes for TypeScript, spread 25%, and for Python, spread 45%. Each run has 80 samples, so the command does not print `unstable`. p50 spread on those rows is under 3%. Quote the p50.
+- `verify_audit_receipt` p95 for TypeScript at 8192 bytes, spread 39%, and for Node at 8192 and 65536 bytes, spreads 24% and 23%. The Node p50 at 65536 bytes is 2.33 ms with a 5.9% p50 spread. Python p50 is 2.01 ms with a 2.3% p50 spread. The p95 is the part that moved.
+- `compare_authority_contracts` at 4096 and 32768 bytes. TypeScript p50 is 0.185 ms and 4.57 ms. `rust_native` p50 is 0.202 ms and 6.61 ms. p50 spread is under 3% on both. This run does not explain why the JavaScript compare is faster. Node at 32768 bytes is 7.61 ms, about 1 ms above native, which matches a host walk on top of the compare. Python at 32768 bytes is 6.68 ms, inside the spread of the native 6.61 ms.
+- Host `stable_hash` minus host `canonical_json` on the 524288 byte tree is smaller than the p95 spread, so the extra hash is not visible on the host rows. It is visible on the native row. Native `stable_hash` p50 is 1.86 ms and native `canonical_json` p50 is 1.54 ms, both with p50 spread under 3%. That 0.32 ms is one SHA-256 of the canonical bytes. Do not add the two host rows.
