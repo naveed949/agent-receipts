@@ -25,7 +25,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       cat <<'EOF'
 Drive fmt, clippy, cargo test, the Python abi3 wheel, the Node napi binding,
-and byte-identical Rust/Python/Node vector agreement.
+and Rust/Python/Node agreement on canonical JSON.
 
   verify.sh doctor              read-only toolchain check
   verify.sh                     full run
@@ -40,7 +40,7 @@ EOF
   esac
 done
 
-if [[ ! -f "$REPO_ROOT/Cargo.toml" || ! -d "$REPO_ROOT/vectors/canonicalize" ]]; then
+if [[ ! -f "$REPO_ROOT/Cargo.toml" || ! -f "$REPO_ROOT/vectors/reference/vectors.json" || ! -d "$REPO_ROOT/vectors/text" ]]; then
   echo "verify.sh: could not find the agent-receipts repository root from $SKILL_DIR" >&2
   exit 2
 fi
@@ -81,7 +81,11 @@ doctor_check() {
 }
 
 check_repo() {
-  [[ -f "$REPO_ROOT/Cargo.toml" ]] && grep -q 'members = \["crates/core"' "$REPO_ROOT/Cargo.toml"
+  [[ -f "$REPO_ROOT/Cargo.toml" ]] || return 1
+  grep -q 'members = \["crates/core"' "$REPO_ROOT/Cargo.toml" || return 1
+  [[ -f "$REPO_ROOT/vectors/reference/vectors.json" ]] || return 1
+  [[ -f "$REPO_ROOT/vectors/reference/pending-kinds.txt" ]] || return 1
+  [[ -n "$(find "$REPO_ROOT/vectors/text" -name '*.json' -print -quit)" ]]
 }
 
 check_rustc() {
@@ -172,6 +176,32 @@ record_reserved() {
   record "$id" NOT_IMPLEMENTED "no API on this checkout"
 }
 
+record_pending_kinds() {
+  local file="$REPO_ROOT/vectors/reference/pending-kinds.txt"
+  local kind
+  if [[ ! -s "$file" ]]; then
+    record reference-pending-kinds FAIL "pending-kinds.txt is missing"
+    return
+  fi
+  while IFS= read -r kind || [[ -n "$kind" ]]; do
+    kind="${kind#"${kind%%[![:space:]]*}"}"
+    kind="${kind%"${kind##*[![:space:]]}"}"
+    [[ -z "$kind" ]] && continue
+    if grep -RIF --include='*.rs' --include='*.py' --include='*.cjs' --include='*.js' \
+      -e "$kind" \
+      "$REPO_ROOT/crates/core/src" \
+      "$REPO_ROOT/bindings/python/src" \
+      "$REPO_ROOT/bindings/python/tests" \
+      "$REPO_ROOT/bindings/node/src" \
+      "$REPO_ROOT/bindings/node/test" \
+      >/dev/null 2>&1; then
+      record reference-pending-kinds FAIL "pending kind is present in source; this skill does not drive it"
+      return
+    fi
+  done <"$file"
+  record reference-pending-kinds NOT_IMPLEMENTED "reference kinds other than canonicalize have no API"
+}
+
 record_benchmarks() {
   if [[ -d "$REPO_ROOT/benches" || -d "$REPO_ROOT/crates/core/benches" ]]; then
     record benchmarks FAIL "benches/ exists; this skill does not drive it. Do not mark passed."
@@ -250,6 +280,7 @@ run_node_surface() {
 
 build_rust_dump() {
   local dump_dir=$EVIDENCE/dump-canonicalize
+  local dump_bin=$dump_dir/target/debug/dump-canonicalize
   mkdir -p "$dump_dir/src"
   cat >"$dump_dir/Cargo.toml" <<EOF
 [package]
@@ -258,23 +289,39 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[workspace]
+
 [dependencies]
 agent-receipts = { path = "$REPO_ROOT/crates/core" }
 EOF
   cp "$SCRIPT_DIR/dump_canonicalize.rs" "$dump_dir/src/main.rs"
-  cargo build --manifest-path "$dump_dir/Cargo.toml" --target-dir "$REPO_ROOT/target"
+  rm -f "$dump_bin"
+  if ! cargo build --manifest-path "$dump_dir/Cargo.toml" --target-dir "$dump_dir/target"; then
+    echo "dump-canonicalize cargo build failed" >&2
+    return 1
+  fi
+  if [[ ! -x "$dump_bin" ]]; then
+    echo "dump-canonicalize binary missing at $dump_bin" >&2
+    return 1
+  fi
 }
 
 run_agreement() {
   local python=$1
   local logf=$EVIDENCE/cross-language-agreement.log
+  local dump_bin=$EVIDENCE/dump-canonicalize/target/debug/dump-canonicalize
   (
     set -euo pipefail
     build_rust_dump
+    if [[ ! -x "$dump_bin" ]]; then
+      echo "dump-canonicalize binary missing at $dump_bin" >&2
+      exit 1
+    fi
     echo "+ $python $SCRIPT_DIR/agree.py"
     "$python" "$SCRIPT_DIR/agree.py" \
-      --vectors "$REPO_ROOT/vectors/canonicalize" \
-      --rust-dump "$REPO_ROOT/target/debug/dump-canonicalize" \
+      --reference "$REPO_ROOT/vectors/reference" \
+      --text "$REPO_ROOT/vectors/text" \
+      --rust-dump "$dump_bin" \
       --node-binding "$REPO_ROOT/bindings/node" \
       --node-dump "$SCRIPT_DIR/dump_canonicalize.cjs"
   ) >"$logf" 2>&1
@@ -395,6 +442,7 @@ record_reserved hmac-verification 'hmac'
 record_reserved authority-contract-comparison 'authority'
 record_reserved async-streaming-verifier 'async[[:space:]]+fn'
 record_benchmarks
+record_pending_kinds
 
 cp "$RESULTS" "$EVIDENCE/summary.tsv"
 print_summary

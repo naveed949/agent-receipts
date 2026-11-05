@@ -1,0 +1,3 @@
+controlled-integrity
+audit.verifyAuditReceipt
+compareAuthorityContracts

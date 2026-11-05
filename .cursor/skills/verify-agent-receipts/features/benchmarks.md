@@ -1,6 +1,6 @@
 # Benchmarks
 
-There is no benchmark suite in this checkout. Timing `canonicalize_bytes` by hand is not a product surface.
+There is no benchmark suite in this checkout. Timing `canonical_json` by hand is not a product surface.
 
 ## Sub-features
 
