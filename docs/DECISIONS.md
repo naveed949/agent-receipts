@@ -140,3 +140,19 @@ Node napi functions report `length` 0. That property does not see an added param
 `vectors/reference/vectors.json` stays byte-identical. `crates/core/tests/public_api.rs` asserts sha256 `70507a2b636c05bf9841cb99921ff91908cd5e2ab7e270b14802f32727bbb7c1`. That hash is the CI gate for the file bytes. A check that parsed history and required a bump from `0.0.0` to `0.1.0` when the hash changed would demand a release this work does not make. The workspace version stays `0.0.0`. The reference runner still checks each expected field.
 
 `record_public_api` calls `public_api_policy_ok` on the logs the drive already wrote. A second cargo, pytest, or npm run inside that function could not be fed a planted log. `prove-public-api-surface.sh` points the same predicate at planted logs. `python_log_hmac_ok` still accepts a skipped pytest summary. The public API predicate requires a `PASSED` line per public API test and a summary with no skip and no failure.
+
+## 2026-11-05 Latency
+
+The measurement is one public call. The caller builds the host value before the clock starts. The clock wraps that call and one observation of the result, the string length, the boolean, or `relationship`. The observation stays inside the clock so the result has to materialize. The loop does not call a garbage collector.
+
+Node and Python time their public exports, so the sample includes the host walk into `Json` and the walk back out. Python releases the GIL only around the core call. Node compare also pays `JSON.parse` and `freeze_tree`, and it loads the host twice. `Host::load` evaluates `isProxy` through `run_script` on every build. Those costs are the measurement. A timer around the Rust function alone would answer a different question.
+
+The Rust series calls `canonical_json_value`, `stable_hash_value`, `verify_audit_receipt`, `verify_controlled_integrity`, and `compare_authority_contracts` on a `Json` built with the public constructors before the clock. `std::hint::black_box` holds the observed value. That series does not walk a host value. The report prints it in a second table and does not rank it with the hosts. The clock is `std::time::Instant`. Node uses `process.hrtime.bigint`. Python uses `time.perf_counter_ns`.
+
+`bench/rust-native` is a separate Cargo package with a path dependency on `crates/core`. It is not a workspace member. There is no `benches/` directory and no bench table under `crates/` or `bindings/`. `cargo bench` and Criterion choose their own iteration counts, and they would time a Rust target this skill does not drive. The iteration counts live in `effort` inside `bench/run.ts`.
+
+`bench/ts-baseline` is a clean-room TypeScript implementation. It is the vector oracle and one of the four timed implementations. It is not a binding, and it is not published. HMAC in that module uses `node:crypto`. The product HMAC stays in Rust.
+
+`./bench/run smoke` is the check `verify.sh` and the bench workflow run. Warmup is 2 and each case runs 5 times in one process. A noisy smoke percentile does not fail the row. `./bench/run full` is the measurement. It uses five fresh processes, so each repeat warms up again and the p95 spread includes JIT. Full pins one CPU with `taskset` when that program is on `PATH`. Otherwise the file records `unpinned`. A dirty worktree writes `bench/results/full.dirty.json` and does not replace `bench/results/full.json`.
+
+Synthetic compare pairs are version 2. Version 1 rejects `network.https`, and the size ladder needs HTTPS rules with explicit ports so port handling is inside the timed call. The vector case stays `cmp-v1-mixed-and-order`. The audit ladder stays version 1 so the size axis is artifact bulk and the MAC input stays 64 hex characters. Controlled verify MACs the whole canonical body. Those two HMAC rows are not averaged.

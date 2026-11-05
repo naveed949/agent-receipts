@@ -72,3 +72,40 @@ jobs:
           npm ci
           npm run build
           npm test
+
+  bench:
+    name: bench
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.83.0
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        id: cpython39
+        with:
+          python-version: "3.9"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build the release wheel and install it
+        run: |
+          set -euo pipefail
+          python3 -m pip install maturin==1.16.0
+          maturin build --release --manifest-path bindings/python/Cargo.toml --interpreter python3
+          mapfile -t wheels < <(find target/wheels -name '*cp39-abi3*.whl' -type f | sort)
+          if [ "${#wheels[@]}" -ne 1 ]; then
+            printf 'expected exactly one cp39-abi3 wheel, found %s\n' "${#wheels[@]}" >&2
+            exit 1
+          fi
+          "${{ steps.cpython39.outputs.python-path }}" -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check "${wheels[0]}"
+      - name: Build the release Node addon
+        working-directory: bindings/node
+        run: |
+          npm ci
+          npm run build
+      - name: Smoke
+        run: ./bench/run smoke --out "$RUNNER_TEMP/bench-results.json" --python "$RUNNER_TEMP/venv/bin/python"

@@ -23,7 +23,7 @@ This directory is the maintained source for verifying agent-receipts. Read this 
 - Capture the command and the resulting status line, not only the last screen of output.
 - `PASS` is allowed only for a surface the script actually ran.
 - `FAIL` is required when a toolchain for an existing surface is missing.
-- `NOT_IMPLEMENTED` is required for the async streaming verifier and benchmarks until those APIs exist. Canonicalization, HMAC verification, authority-contract comparison, and an empty pending-kinds file stay passing features.
+- `NOT_IMPLEMENTED` is required for the async streaming verifier until that API exists. Benchmarks pass when smoke exits 0, the three `ts-baseline` lines are in the log, and `./bench/run parse` accepts the evidence file. Canonicalization, HMAC verification, authority-contract comparison, and an empty pending-kinds file stay passing features.
 - `UNSUPPORTED` is only for a product surface that cannot run on this OS even with the toolchain. There is no such surface on the CI targets today. Do not use it as a skip for a missing `rustfmt` or `node`.
 - Do not report a skipped entry point as verified through a different path.
 
@@ -49,5 +49,5 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [HMAC verification](./hmac-verification.md) covers audit-receipt verify and resign, controlled integrity, the eight HMAC reference rows, and the v1 `gondolinHttps` ban.
 - [Authority-contract comparison](./authority-contract-comparison.md) covers `compare_authority_contracts` and the seven comparison rows.
 - [Async streaming verifier](./async-streaming-verifier.md) is not yet implemented.
-- [Benchmarks](./benchmarks.md) are not yet implemented.
+- [Benchmarks](./benchmarks.md) covers `./bench/run` smoke, full, and parse.
 - [Reference pending kinds](./reference-pending-kinds.md) is empty. Every reference kind has an API.
