@@ -7,6 +7,8 @@ SKILL_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 REPO_ROOT=$(cd "$SKILL_DIR/../../.." && pwd)
 # shellcheck source=hmac-surface.sh
 . "$SCRIPT_DIR/hmac-surface.sh"
+# shellcheck source=public-api-surface.sh
+. "$SCRIPT_DIR/public-api-surface.sh"
 
 unset CARGO_TARGET_DIR
 export CARGO_TARGET_DIR="$REPO_ROOT/target"
@@ -264,6 +266,17 @@ record_authority() {
   record authority-contract-comparison PASS "rust python node compare 7 ok"
 }
 
+record_public_api() {
+  local cargo_log=$EVIDENCE/cargo-test.log
+  local py_log=$EVIDENCE/python-abi3.log
+  local node_log=$EVIDENCE/node-napi.log
+  if public_api_policy_ok "$REPO_ROOT" "$cargo_log" "$py_log" "$node_log"; then
+    record public-api-policy PASS "rust python node public signatures pinned"
+    return
+  fi
+  record public-api-policy FAIL "public_api_policy_ok rejected the logs; see $cargo_log $py_log $node_log"
+}
+
 record_benchmarks() {
   if [[ -d "$REPO_ROOT/benches" || -d "$REPO_ROOT/crates/core/benches" ]]; then
     record benchmarks FAIL "benches/ exists; this skill does not drive it. Do not mark passed."
@@ -325,8 +338,8 @@ run_python_surface() {
       pip_install+=( --user )
     fi
     "$python" -m pip "${pip_install[@]}"
-    echo "+ $python -m pytest bindings/python/tests"
-    "$python" -m pytest "$REPO_ROOT/bindings/python/tests"
+    echo "+ $python -m pytest -v bindings/python/tests"
+    "$python" -m pytest -v "$REPO_ROOT/bindings/python/tests"
   ) >"$logf" 2>&1
 }
 
@@ -527,6 +540,7 @@ fi
 
 record_hmac
 record_authority
+record_public_api
 record_reserved async-streaming-verifier 'async[[:space:]]+fn'
 record_benchmarks
 record_pending_kinds

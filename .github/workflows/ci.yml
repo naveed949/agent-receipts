@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
+          - ubuntu-24.04
           - ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -24,17 +24,28 @@ jobs:
           toolchain: 1.83.0
           components: rustfmt, clippy
       - uses: actions/setup-python@v5
+        id: cpython39
         with:
-          python-version: "3.12"
+          python-version: "3.9"
+      - uses: actions/setup-python@v5
+        id: cpython313
+        with:
+          python-version: "3.13"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-      - run: python3 -m pip install maturin==1.16.0 pytest
+      - run: python3 -m pip install maturin==1.16.0
       - run: maturin build --release --manifest-path bindings/python/Cargo.toml --interpreter python3
-      - name: Install the abi3 wheel and run pytest
+      - name: Upload the abi3 wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-receipts-cp39-abi3-${{ runner.arch }}
+          path: target/wheels/*cp39-abi3*.whl
+          if-no-files-found: error
+      - name: Install the abi3 wheel on CPython 3.9 and 3.13
         run: |
           set -euo pipefail
           mapfile -t wheels < <(find target/wheels -name '*cp39-abi3*.whl' -type f | sort)
@@ -43,8 +54,18 @@ jobs:
             printf '%s\n' "${wheels[@]}" >&2
             exit 1
           fi
-          python3 -m pip install "${wheels[0]}"
-          python3 -m pytest bindings/python/tests
+          wheel=${wheels[0]}
+          printf 'wheel %s\n' "$wheel"
+          install_and_test() {
+            local python=$1
+            local venv=$2
+            "$python" -m venv "$venv"
+            "$venv/bin/python" -m pip install --disable-pip-version-check pytest "$wheel"
+            "$venv/bin/python" -c "import sys, agent_receipts; print(sys.version); print(agent_receipts.__file__)"
+            "$venv/bin/python" -m pytest bindings/python/tests
+          }
+          install_and_test "${{ steps.cpython39.outputs.python-path }}" "$RUNNER_TEMP/venv-39"
+          install_and_test "${{ steps.cpython313.outputs.python-path }}" "$RUNNER_TEMP/venv-313"
       - name: Build and test the Node binding
         working-directory: bindings/node
         run: |

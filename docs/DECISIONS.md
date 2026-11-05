@@ -112,3 +112,31 @@ The two constructors use different units. That is the reference rule, not a cryp
 - Controlled-integrity signer: always measured in UTF-8 bytes of the key material HMAC will use. Below 16 is `ShortControlledKey`. The same eight `é` characters pass. A 15-byte array fails.
 
 HMAC-SHA256 consumes the UTF-8 bytes. UTF-16 length is a host-string accident. Keep the split until one unit is chosen. If the constructors are unified later, 16 UTF-8 bytes is the unit that matches the MAC.
+
+## 2026-11-05 SemVer pins and one abi3 wheel
+
+A stored `stableHash` or HMAC tag is a promise about bytes. Changing those bytes, or the 64 ASCII hex characters HMAC covers, is a major change even when the function names stay the same. `docs/VERSIONING.md` is the reference. `0.y.z` uses the same meanings as `1.y.z` and increments the minor for a break until `1.0.0`.
+
+The three packages share `[workspace.package].version`. A host-only export still bumps that number. Bindings do not keep a private compatibility series.
+
+`cargo-semver-checks` wants a published crates.io baseline. This crate is `publish = false` and `0.0.0`, so that tool has nothing to diff. `cargo public-api` wants rustdoc JSON. That dump is unstable on the pinned 1.83 toolchain. The pin is `crates/core/tests/public_api.rs`: each public function is assigned to a function pointer with the exact type, and each public enum is matched exhaustively. A renamed argument or a new variant fails at `rustc`. Python uses `inspect.signature` and the exported name set. Node uses `Object.keys` and `error.code`. Those tests need no extra binary. Adding a public item does not fail the Rust compile test until someone adds a pointer. That miss is a missed minor, not a missed major.
+
+One `cp39-abi3` wheel is the product. Per-CPython wheels would rebuild the same limited-API module for 3.9, 3.10, 3.11, 3.12, and 3.13. The binding copies host values into an owned tree. The limited API can do that copy. The cost is the limited API, not a missing opcode. CI builds that wheel on `ubuntu-24.04` and `ubuntu-24.04-arm`, uploads `agent-receipts-cp39-abi3-${{ runner.arch }}`, then installs it into a clean venv on CPython 3.9 and again on 3.13. Those two minors are the declared floor and a current CPython. The same pytest suite, including the shared vectors, runs in each venv. There is no PyPI upload. `ubuntu-latest` is Ubuntu 26.04. `actions/setup-python` has no 3.9 build there, so the x86_64 job stays on 24.04.
+
+## 2026-11-05 In-place public API checks
+
+The compatibility checks stay in the three language tests and in `public_api_policy_ok`. There is no shared registry. A file that Rust, Python, and Node all read would let one edit rename a `.code` string and update every expectation together. The host literals stay in the host tests, so a Rust-only edit of the match leaves those literals stale.
+
+Python `inspect.signature` records the name, the kind, and the default. Every current parameter is positional-or-keyword with an empty default. A `default=None` keeps the names and fails this check.
+
+Node napi functions report `length` 0. That property does not see an added parameter. The Node test reads required parameter names from the generated `index.d.ts` after the build. The file stays gitignored.
+
+`compare_authority_contracts` returns exactly `relationship`, `widened`, and `narrowed`. Node `freeze_tree` freezes the compare result and both normalize results. The public API test walks `Object.isFrozen` on those objects, including nested policy fields and HTTPS rule objects.
+
+`invalid_input` stays a Rust-only `AuthorityError::code`. `compare_authority_contracts_bytes` returns it for duplicate-key JSON text. The Python and Node authority functions accept objects. Accepting `bytes` or `Buffer` would add a public input so a test could observe `invalid_input`. The authority functions still accept objects only.
+
+`short_audit_key`, `short_controlled_key`, and `invalid_key_id` stay Rust-only `.code` strings. Host exceptions keep their existing class and message. `not_utf8` and `invalid_json` stay on the Rust and Python bytes paths. A Node `Buffer` passed to `canonicalJson` is `type_error`. A `datetime` or a `Date` compared with `{}` is host conversion. Its `.code` is `Error::code` `type_error`.
+
+`vectors/reference/vectors.json` stays byte-identical. `crates/core/tests/public_api.rs` asserts sha256 `70507a2b636c05bf9841cb99921ff91908cd5e2ab7e270b14802f32727bbb7c1`. That hash is the CI gate for the file bytes. A check that parsed history and required a bump from `0.0.0` to `0.1.0` when the hash changed would demand a release this work does not make. The workspace version stays `0.0.0`. The reference runner still checks each expected field.
+
+`record_public_api` calls `public_api_policy_ok` on the logs the drive already wrote. A second cargo, pytest, or npm run inside that function could not be fed a planted log. `prove-public-api-surface.sh` points the same predicate at planted logs. `python_log_hmac_ok` still accepts a skipped pytest summary. The public API predicate requires a `PASSED` line per public API test and a summary with no skip and no failure.

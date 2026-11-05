@@ -1,6 +1,6 @@
 # Canonical JSON
 
-`canonical_json` and `stable_hash` rewrite one JSON value into the reference form, or return a stable error code. Python and Node expose the same two operations. Eight reference rows match. The HMAC rows run separately. The remaining reference rows are pending.
+`canonical_json` and `stable_hash` rewrite one JSON value into the reference form, or return a stable error code. Python and Node expose the same two operations. Eight reference rows match. The HMAC rows and the seven `compareAuthorityContracts` rows run separately. `pending-kinds.txt` is empty.
 
 ## Sub-features
 
@@ -8,7 +8,7 @@
 - `canon-stable` returns the same bytes when the successful output is passed in again.
 - `canon-reject` returns `type_error` for each child of the canonicalize row that carries `expectedError`.
 - `canon-text` runs `vectors/text` through the Rust and Python bytes entry. Node does not read that directory.
-- `canon-pending` prints each still-pending kind and counts 7 pending rows beside 8 canonicalize rows and 8 HMAC rows.
+- `canon-pending` prints `pending 0`. Every reference kind has an API.
 
 ## How to get to it (user POV)
 
@@ -35,5 +35,5 @@ Preconditions:
 - A passing `cargo check` is not this feature.
 - `maturin develop` is not the abi3 wheel path. The Python entry is the installed `*cp39-abi3*.whl`.
 - Compare `canonicalUtf8Hex` and `stableHash`. `expected.canonical` is not the oracle.
-- Pending rows are printed and counted. They are not a pass of those kinds.
+- An empty pending-kinds file is a pass of this kind list. It is not a skip.
 - An empty `vectors/text` directory fails doctor.
