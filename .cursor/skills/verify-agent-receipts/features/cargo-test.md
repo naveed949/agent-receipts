@@ -1,6 +1,6 @@
 # Cargo tests
 
-`cargo test --workspace` runs the Rust unit tests, the reference runner, and the custom vector runner that reads `vectors/text`.
+`cargo test --workspace` runs the Rust unit tests, the public-API signature pin, the reference runner, and the custom vector runner that reads `vectors/text`.
 
 ## Sub-features
 
@@ -8,6 +8,7 @@
 - `test-reference` runs the in-crate reference walker over `vectors/reference/vectors.json`.
 - `test-text` runs `crates/core/tests/vectors.rs` over every `vectors/text/*.json` file.
 - `test-empty` fails when that directory has no JSON files or the file set changes.
+- `test-public-api` compiles `crates/core/tests/public_api.rs` and records `test public_signatures_compile ... ok`.
 
 ## How to get to it (user POV)
 

@@ -6,7 +6,7 @@ The Node binding is a napi addon built in `bindings/node` and tested with `node 
 
 - `node-install` runs `npm ci` with the locked `@napi-rs/cli`.
 - `node-build` runs `napi build --platform --release`.
-- `node-test` runs `test/canonicalize.test.cjs` against the built addon. The file covers the reference vectors, the v1 `gondolinHttps` ban, authority-contract comparison, and host rejects. It does not read `vectors/text`.
+- `node-test` runs `node --test test/*.cjs` against the built addon. `canonicalize.test.cjs` covers the reference vectors, the v1 `gondolinHttps` ban, authority-contract comparison, and host rejects. `public_api.test.cjs` pins export names and `error.code`. Neither file reads `vectors/text`.
 - `node-toolchain` fails closed when Node 22 or npm is missing.
 
 ## How to get to it (user POV)

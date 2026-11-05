@@ -1,13 +1,14 @@
 # Python abi3 wheel
 
-The Python binding ships as one `cp39-abi3` wheel built by maturin, then pytest runs against that installed wheel.
+The Python binding ships as one `cp39-abi3` wheel built by maturin, then pytest runs against that installed wheel. GitHub Actions builds that wheel on linux x86_64 and aarch64, uploads it as `agent-receipts-cp39-abi3-<arch>`, and installs it into a clean venv on CPython 3.9 and 3.13. Local `verify.sh` installs the same wheel into one `python3`.
 
 ## Sub-features
 
 - `py-build` builds `bindings/python` with `maturin==1.16.0` for `python3`.
 - `py-wheel` deletes stale `*cp39-abi3*.whl` files, then installs the wheel path maturin reports for this build.
-- `py-pytest` runs `bindings/python/tests` on the installed module.
+- `py-pytest` runs `bindings/python/tests` on the installed module, including the public-API inspect tests and the shared vectors.
 - `py-toolchain` fails closed when Python 3.9+, pip, maturin, or pytest cannot run.
+- `py-ci-venv` is the Actions path: a clean venv on 3.9 and a clean venv on 3.13, each installing the same `cp39-abi3` wheel. Local verify does not require both CPythons.
 
 ## How to get to it (user POV)
 

@@ -1,6 +1,6 @@
 ---
 name: verify-agent-receipts
-description: "Use when verifying agent-receipts on a local checkout, before a push, after changing canonical_json, stable_hash, HMAC verify or resign, compare_authority_contracts, or their Python or Node bindings, after changing files under vectors/reference or vectors/text, or when fmt, clippy, cargo test, maturin, pytest, or napi results are in doubt."
+description: "Use when verifying agent-receipts on a local checkout, before a push, after changing canonical_json, stable_hash, HMAC verify or resign, compare_authority_contracts, their public signatures, or their Python or Node bindings, after changing files under vectors/reference or vectors/text, or when fmt, clippy, cargo test, maturin, pytest, or napi results are in doubt."
 ---
 
 # Verify agent-receipts
@@ -64,19 +64,20 @@ The script drives every surface that exists on this checkout:
 | --- | --- |
 | `rustfmt` | `cargo fmt --all --check` |
 | `clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
-| `cargo-test` | `cargo test --workspace` (includes `crates/core/tests/vectors.rs` over `vectors/text` and the reference runner) |
+| `cargo-test` | `cargo test --workspace` (includes `crates/core/tests/public_api.rs`, `crates/core/tests/vectors.rs` over `vectors/text`, and the reference runner) |
 | `python-abi3` | `maturin build --release --manifest-path bindings/python/Cargo.toml --interpreter python3`, install the wheel path maturin reports for this build, then `python3 -m pytest bindings/python/tests` |
 | `node-napi` | in `bindings/node`: `npm ci`, `npm run build`, `npm test` |
 | `cross-language-agreement` | compare Rust, Python, and Node on every reference success row (`canonicalUtf8Hex` and `stableHash`), compare Rust, Python, and Node on every HMAC subcase, compare Rust, Python, and Node on every `compareAuthorityContracts` row and subcase, reject dump last-win on duplicate `filesystem.read` keys as `invalid_input`, and compare Rust and Python on every `vectors/text` file |
 | `hmac-verification` | require a zero-failure pytest summary, the exact line `hmac 8 ok` from Node and from agreement, `test reference::reference_vectors ... ok` from cargo, and the verify/resign HMAC API in source |
 | `authority-contract-comparison` | require `compare 7 ok` from Node and from agreement, `test reference::reference_vectors ... ok` from cargo, and the compare API in source |
+| `public-api-policy` | require `test public_signatures_compile ... ok` from cargo, `test_public_api.py` and a zero-failure pytest summary from the installed abi3 wheel, and `exported names` from Node |
 
 It then records reserved names from `docs/DECISIONS.md` that have no API yet:
 
 - `async-streaming-verifier`
 - `benchmarks`
 
-Those rows are `NOT_IMPLEMENTED` when source under `crates/core/src` and the bindings has no matching API. If that API appears, the row is `FAIL` (stale skill), never `PASS`. Canonicalization, HMAC verification, and authority-contract comparison stay `PASS` when the script actually drove them. `reference-pending-kinds` is `PASS` when the allowlist file exists and is empty.
+Those rows are `NOT_IMPLEMENTED` when source under `crates/core/src` and the bindings has no matching API. If that API appears, the row is `FAIL` (stale skill), never `PASS`. Canonicalization, HMAC verification, authority-contract comparison, and the public-API policy stay `PASS` when the script actually drove them. `reference-pending-kinds` is `PASS` when the allowlist file exists and is empty.
 
 Drive each mapped feature through this script. The feature file names the surface id and the log to read. Do not mark a feature passed because a different surface passed.
 
@@ -84,7 +85,7 @@ Drive each mapped feature through this script. The feature file names the surfac
 
 Logs live in `$VERIFY_EVIDENCE_DIR` when set, else `/tmp/agent-receipts-verify-<timestamp>-<pid>/`.
 
-Proof for an existing surface is the command log plus a `PASS` or `FAIL` line. Proof for agreement is `reference <name> rust-python-node ok` for each success row, `reference <name> python-node type_error` for the rejection row, `text <name> rust-python ok` for every file in `vectors/text`, `compare <name> rust-python-node ok` for each comparison row, then `pending 0`, the exact line `hmac 8 ok`, the exact line `compare 7 ok`, `reference 8 ok`, and `text` with a count equal to the number of text files. Proof for HMAC is a pytest summary with no `N failed` clause, `hmac 8 ok` in `node-napi.log`, the exact line `hmac 8 ok` in `cross-language-agreement.log`, and `test reference::reference_vectors ... ok` in `cargo-test.log`. A pytest summary such as `19 passed, 1 skipped in` is still a zero-failure run. A mixed pytest summary such as `1 failed, 17 passed` is `FAIL`. Proof for authority-contract comparison is `compare 7 ok` in `node-napi.log` and in `cross-language-agreement.log`. Proof for a reserved feature is a `NOT_IMPLEMENTED` line, not a skipped `PASS`.
+Proof for an existing surface is the command log plus a `PASS` or `FAIL` line. Proof for agreement is `reference <name> rust-python-node ok` for each success row, `reference <name> python-node type_error` for the rejection row, `text <name> rust-python ok` for every file in `vectors/text`, `compare <name> rust-python-node ok` for each comparison row, then `pending 0`, the exact line `hmac 8 ok`, the exact line `compare 7 ok`, `reference 8 ok`, and `text` with a count equal to the number of text files. Proof for HMAC is a pytest summary with no `N failed` clause, `hmac 8 ok` in `node-napi.log`, the exact line `hmac 8 ok` in `cross-language-agreement.log`, and `test reference::reference_vectors ... ok` in `cargo-test.log`. A pytest summary such as `19 passed, 1 skipped in` is still a zero-failure run. A mixed pytest summary such as `1 failed, 17 passed` is `FAIL`. Proof for authority-contract comparison is `compare 7 ok` in `node-napi.log` and in `cross-language-agreement.log`. Proof for a reserved feature is a `NOT_IMPLEMENTED` line, not a skipped `PASS`. Proof for the public-API policy is `test public_signatures_compile ... ok` in `cargo-test.log`, `test_public_api.py` plus a zero-failure pytest summary in `python-abi3.log`, and `exported names` in `node-napi.log`.
 
 `verify.sh` unsets `CARGO_TARGET_DIR` and points it at this checkout's `target/`. It deletes stale `*cp39-abi3*.whl` files before the maturin build and installs the wheel path printed by that build. It does not glob `$REPO_ROOT/target/wheels` blindly.
 

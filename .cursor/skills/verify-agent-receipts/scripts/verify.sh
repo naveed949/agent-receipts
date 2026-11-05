@@ -264,6 +264,33 @@ record_authority() {
   record authority-contract-comparison PASS "rust python node compare 7 ok"
 }
 
+record_public_api() {
+  local cargo_log=$EVIDENCE/cargo-test.log
+  local py_log=$EVIDENCE/python-abi3.log
+  local node_log=$EVIDENCE/node-napi.log
+  if [[ ! -f "$cargo_log" ]] || ! grep -q 'test public_signatures_compile ... ok' "$cargo_log"; then
+    record public-api-policy FAIL "rust public_signatures_compile not ok; see $cargo_log"
+    return
+  fi
+  if [[ ! -f "$cargo_log" ]] || ! grep -q 'test public_enum_variants_are_exhaustive ... ok' "$cargo_log"; then
+    record public-api-policy FAIL "rust public_enum_variants_are_exhaustive not ok; see $cargo_log"
+    return
+  fi
+  if ! python_log_hmac_ok "$py_log"; then
+    record public-api-policy FAIL "python pytest did not report a zero-failure passed run; see $py_log"
+    return
+  fi
+  if [[ ! -f "$py_log" ]] || ! grep -q 'test_public_api.py' "$py_log"; then
+    record public-api-policy FAIL "python test_public_api.py missing; see $py_log"
+    return
+  fi
+  if [[ ! -f "$node_log" ]] || ! grep -Eq 'ok [0-9]+ - exported names' "$node_log"; then
+    record public-api-policy FAIL "node exported names missing; see $node_log"
+    return
+  fi
+  record public-api-policy PASS "rust python node public signatures pinned"
+}
+
 record_benchmarks() {
   if [[ -d "$REPO_ROOT/benches" || -d "$REPO_ROOT/crates/core/benches" ]]; then
     record benchmarks FAIL "benches/ exists; this skill does not drive it. Do not mark passed."
@@ -527,6 +554,7 @@ fi
 
 record_hmac
 record_authority
+record_public_api
 record_reserved async-streaming-verifier 'async[[:space:]]+fn'
 record_benchmarks
 record_pending_kinds
