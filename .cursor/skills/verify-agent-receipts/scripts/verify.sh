@@ -7,6 +7,8 @@ SKILL_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 REPO_ROOT=$(cd "$SKILL_DIR/../../.." && pwd)
 # shellcheck source=hmac-surface.sh
 . "$SCRIPT_DIR/hmac-surface.sh"
+# shellcheck source=public-api-surface.sh
+. "$SCRIPT_DIR/public-api-surface.sh"
 
 unset CARGO_TARGET_DIR
 export CARGO_TARGET_DIR="$REPO_ROOT/target"
@@ -268,27 +270,11 @@ record_public_api() {
   local cargo_log=$EVIDENCE/cargo-test.log
   local py_log=$EVIDENCE/python-abi3.log
   local node_log=$EVIDENCE/node-napi.log
-  if [[ ! -f "$cargo_log" ]] || ! grep -q 'test public_signatures_compile ... ok' "$cargo_log"; then
-    record public-api-policy FAIL "rust public_signatures_compile not ok; see $cargo_log"
+  if public_api_policy_ok "$REPO_ROOT" "$cargo_log" "$py_log" "$node_log"; then
+    record public-api-policy PASS "rust python node public signatures pinned"
     return
   fi
-  if [[ ! -f "$cargo_log" ]] || ! grep -q 'test public_enum_variants_are_exhaustive ... ok' "$cargo_log"; then
-    record public-api-policy FAIL "rust public_enum_variants_are_exhaustive not ok; see $cargo_log"
-    return
-  fi
-  if ! python_log_hmac_ok "$py_log"; then
-    record public-api-policy FAIL "python pytest did not report a zero-failure passed run; see $py_log"
-    return
-  fi
-  if [[ ! -f "$py_log" ]] || ! grep -q 'test_public_api.py' "$py_log"; then
-    record public-api-policy FAIL "python test_public_api.py missing; see $py_log"
-    return
-  fi
-  if [[ ! -f "$node_log" ]] || ! grep -Eq 'ok [0-9]+ - exported names' "$node_log"; then
-    record public-api-policy FAIL "node exported names missing; see $node_log"
-    return
-  fi
-  record public-api-policy PASS "rust python node public signatures pinned"
+  record public-api-policy FAIL "public_api_policy_ok rejected the logs; see $cargo_log $py_log $node_log"
 }
 
 record_benchmarks() {
@@ -352,8 +338,8 @@ run_python_surface() {
       pip_install+=( --user )
     fi
     "$python" -m pip "${pip_install[@]}"
-    echo "+ $python -m pytest bindings/python/tests"
-    "$python" -m pytest "$REPO_ROOT/bindings/python/tests"
+    echo "+ $python -m pytest -v bindings/python/tests"
+    "$python" -m pytest -v "$REPO_ROOT/bindings/python/tests"
   ) >"$logf" 2>&1
 }
 
