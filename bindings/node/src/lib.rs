@@ -1,12 +1,12 @@
 use std::ffi::CString;
 use std::ptr;
 
-use napi::bindgen_prelude::{Env, JsObjectValue, Object, Unknown as JsUnknown};
+use napi::bindgen_prelude::{Buffer, Either, Env, JsObjectValue, Object, Unknown as JsUnknown};
 use napi::sys::{self, napi_value};
 use napi::{check_status, Error as NapiError, JsValue, Status, ValueType};
 use napi_derive::napi;
 
-use agent_receipts::{Error, Json, Wtf16};
+use agent_receipts::{Error, Json, SignerError, SigningKey, Wtf16};
 
 enum Fail {
     Core(Error),
@@ -42,6 +42,214 @@ pub fn stable_hash(
     match build(env, value) {
         Ok(tree) => agent_receipts::stable_hash_value(&tree).map_err(core_error),
         Err(err) => Err(fail_to_napi(err)),
+    }
+}
+
+#[napi(js_name = "verifyAuditReceipt")]
+pub fn verify_audit_receipt(env: &Env, receipt: JsUnknown, key: JsUnknown) -> bool {
+    let ok = match (build(env, receipt), key_from_unknown(&key)) {
+        (Ok(tree), Ok(key)) => agent_receipts::verify_audit_receipt(&tree, &key),
+        _ => false,
+    };
+    clear_pending_exception(env);
+    ok
+}
+
+#[napi(js_name = "resignAuditReceipt")]
+pub fn resign_audit_receipt<'env>(
+    env: &'env Env,
+    receipt: JsUnknown,
+    key: Either<String, Buffer>,
+) -> std::result::Result<JsUnknown<'env>, NapiError<&'static str>> {
+    let tree = build(env, receipt).map_err(fail_to_napi)?;
+    let key = key_bytes(&key).map_err(fail_to_napi)?;
+    let resigned = agent_receipts::resign_audit_receipt(&tree, &key).map_err(core_error)?;
+    let bytes = agent_receipts::canonical_json_value(&resigned).map_err(core_error)?;
+    json_parse(env, bytes).map_err(fail_to_napi)
+}
+
+#[napi(js_name = "verifyControlledIntegrity")]
+pub fn verify_controlled_integrity(
+    env: &Env,
+    value: JsUnknown,
+    key: JsUnknown,
+    key_id: JsUnknown,
+    evidence: JsUnknown,
+) -> bool {
+    let ok = match (
+        build(env, value),
+        key_from_unknown(&key),
+        js_string(&key_id),
+        build(env, evidence),
+    ) {
+        (Ok(value), Ok(key), Ok(key_id), Ok(evidence)) => {
+            agent_receipts::verify_controlled_integrity(&value, &key, &key_id, &evidence)
+        }
+        _ => false,
+    };
+    clear_pending_exception(env);
+    ok
+}
+
+#[napi(js_name = "signControlledIntegrity")]
+pub fn sign_controlled_integrity<'env>(
+    env: &'env Env,
+    value: JsUnknown,
+    key: Either<String, Buffer>,
+    key_id: String,
+) -> std::result::Result<JsUnknown<'env>, NapiError<&'static str>> {
+    let tree = build(env, value).map_err(fail_to_napi)?;
+    let key = key_bytes(&key).map_err(fail_to_napi)?;
+    let evidence =
+        agent_receipts::sign_controlled_integrity(&tree, &key, &key_id).map_err(signer_error)?;
+    let bytes = agent_receipts::canonical_json_value(&evidence).map_err(core_error)?;
+    json_parse(env, bytes).map_err(fail_to_napi)
+}
+
+#[napi(js_name = "auditSigningKey")]
+pub fn audit_signing_key_js(
+    key: Either<String, Buffer>,
+) -> std::result::Result<Buffer, NapiError<&'static str>> {
+    let checked = match &key {
+        Either::A(text) => {
+            let utf8 = text.as_bytes();
+            agent_receipts::audit_signing_key(SigningKey::Text {
+                utf8,
+                utf16_len: text.encode_utf16().count(),
+            })
+        }
+        Either::B(bytes) => agent_receipts::audit_signing_key(SigningKey::Bytes(bytes.as_ref())),
+    }
+    .map_err(signer_error)?;
+    Ok(Buffer::from(checked.to_vec()))
+}
+
+#[napi(js_name = "controlledSigningKey")]
+pub fn controlled_signing_key_js(
+    key: Either<String, Buffer>,
+) -> std::result::Result<Buffer, NapiError<&'static str>> {
+    let bytes = key_bytes(&key).map_err(fail_to_napi)?;
+    let checked = agent_receipts::controlled_signing_key(&bytes).map_err(signer_error)?;
+    Ok(Buffer::from(checked.to_vec()))
+}
+
+#[napi]
+pub const AUDIT_RECEIPT_VERSION: &str = agent_receipts::AUDIT_RECEIPT_VERSION;
+
+#[napi]
+pub const AUDIT_RECEIPT_V2_VERSION: &str = agent_receipts::AUDIT_RECEIPT_V2_VERSION;
+
+#[napi]
+pub const CONTROLLED_INTEGRITY_VERSION: &str = agent_receipts::CONTROLLED_INTEGRITY_VERSION;
+
+fn key_bytes(key: &Either<String, Buffer>) -> Result<Vec<u8>, Fail> {
+    match key {
+        Either::A(text) => Ok(text.as_bytes().to_vec()),
+        Either::B(bytes) => Ok(bytes.to_vec()),
+    }
+}
+
+fn key_from_unknown(value: &JsUnknown<'_>) -> Result<Vec<u8>, Fail> {
+    match value.get_type().map_err(Fail::Host)? {
+        ValueType::String => utf8_from_js_string(value),
+        _ if value.is_buffer().map_err(Fail::Host)? => buffer_bytes(value),
+        _ => Err(Fail::Core(Error::TypeError)),
+    }
+}
+
+fn js_string(value: &JsUnknown<'_>) -> Result<String, Fail> {
+    if value.get_type().map_err(Fail::Host)? != ValueType::String {
+        return Err(Fail::Core(Error::TypeError));
+    }
+    String::from_utf8(utf8_from_js_string(value)?).map_err(|_| Fail::Core(Error::TypeError))
+}
+
+fn utf8_from_js_string(value: &JsUnknown<'_>) -> Result<Vec<u8>, Fail> {
+    let raw_env = value.value().env;
+    let raw_value = value.raw();
+    let mut len = 0usize;
+    check_status!(unsafe {
+        sys::napi_get_value_string_utf8(raw_env, raw_value, ptr::null_mut(), 0, &mut len)
+    })
+    .map_err(Fail::Host)?;
+    let mut buf = vec![0u8; len + 1];
+    let mut written = 0usize;
+    check_status!(unsafe {
+        sys::napi_get_value_string_utf8(
+            raw_env,
+            raw_value,
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            &mut written,
+        )
+    })
+    .map_err(Fail::Host)?;
+    buf.truncate(written);
+    Ok(buf)
+}
+
+fn buffer_bytes(value: &JsUnknown<'_>) -> Result<Vec<u8>, Fail> {
+    let mut data = ptr::null_mut();
+    let mut len = 0usize;
+    check_status!(unsafe {
+        sys::napi_get_buffer_info(value.value().env, value.raw(), &mut data, &mut len)
+    })
+    .map_err(Fail::Host)?;
+    if data.is_null() {
+        return Ok(Vec::new());
+    }
+    Ok(unsafe { std::slice::from_raw_parts(data.cast::<u8>(), len) }.to_vec())
+}
+
+fn clear_pending_exception(env: &Env) {
+    let mut pending = false;
+    if unsafe { sys::napi_is_exception_pending(env.raw(), &mut pending) } != 0 {
+        return;
+    }
+    if !pending {
+        return;
+    }
+    let mut exception = ptr::null_mut();
+    unsafe {
+        sys::napi_get_and_clear_last_exception(env.raw(), &mut exception);
+    }
+}
+
+fn json_parse(env: &Env, bytes: Vec<u8>) -> Result<JsUnknown<'_>, Fail> {
+    let text = decode_utf8(bytes).map_err(Fail::Core)?;
+    env.run_script(format!("JSON.parse({})", json_string_literal(&text)))
+        .map_err(Fail::Host)
+}
+
+fn json_string_literal(text: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in text.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn signer_error(err: SignerError) -> NapiError<&'static str> {
+    match err {
+        SignerError::ShortAuditKey => NapiError::new(
+            "TypeError",
+            "audit signingKey must contain at least 16 bytes",
+        ),
+        SignerError::ShortControlledKey => NapiError::new(
+            "RangeError",
+            "controlled integrity signing key must contain at least 16 bytes",
+        ),
+        SignerError::InvalidKeyId => NapiError::new("TypeError", "invalid key id"),
+        SignerError::RejectedInput => NapiError::new("type_error", "type_error"),
     }
 }
 
