@@ -1,4 +1,5 @@
 /target
+/bench/rust-native/target
 **/*.rs.bk
 .venv/
 __pycache__/
