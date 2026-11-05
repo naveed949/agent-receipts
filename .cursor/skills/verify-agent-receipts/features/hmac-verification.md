@@ -35,6 +35,6 @@ Preconditions:
 - `maturin develop` is not the Python entry. The entry is the installed `*cp39-abi3*.whl`.
 - Bindings that reimplement HMAC in the host language fail this feature even if the tags match.
 - Receipts signed under the earlier MAC preimage are supposed to verify as false until `resign_audit_receipt` restamps them.
-- `compareAuthorityContracts` is still pending. Do not treat those seven rows as HMAC.
+- Do not treat the seven `compareAuthorityContracts` rows as HMAC.
 - A `[0-9]+ passed` grep is not this surface. That pattern matches `0 passed` and `1 failed, 17 passed`.
 - `verify.sh` unsets `CARGO_TARGET_DIR` and installs the wheel path maturin prints. A glob of `$REPO_ROOT/target/wheels` after an inherited `CARGO_TARGET_DIR` is not this surface.

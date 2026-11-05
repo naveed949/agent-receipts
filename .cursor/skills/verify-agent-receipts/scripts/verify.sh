@@ -215,8 +215,12 @@ record_hmac() {
 record_pending_kinds() {
   local file="$REPO_ROOT/vectors/reference/pending-kinds.txt"
   local kind
-  if [[ ! -s "$file" ]]; then
+  if [[ ! -f "$file" ]]; then
     record reference-pending-kinds FAIL "pending-kinds.txt is missing"
+    return
+  fi
+  if ! grep -q '[^[:space:]]' "$file"; then
+    record reference-pending-kinds PASS "no pending kinds"
     return
   fi
   while IFS= read -r kind || [[ -n "$kind" ]]; do
@@ -235,7 +239,29 @@ record_pending_kinds() {
       return
     fi
   done <"$file"
-  record reference-pending-kinds NOT_IMPLEMENTED "compareAuthorityContracts has no API"
+  record reference-pending-kinds FAIL "pending kinds remain"
+}
+
+record_authority() {
+  local cargo_log=$EVIDENCE/cargo-test.log
+  local node_log=$EVIDENCE/node-napi.log
+  if ! code_has 'compare_authority_contracts|compareAuthorityContracts'; then
+    record authority-contract-comparison NOT_IMPLEMENTED "no API on this checkout"
+    return
+  fi
+  if [[ ! -f "$cargo_log" ]] || ! grep -q 'test reference::reference_vectors ... ok' "$cargo_log"; then
+    record authority-contract-comparison FAIL "rust reference_vectors not ok; see $cargo_log"
+    return
+  fi
+  if [[ ! -f "$node_log" ]] || ! grep -Eq '^#? ?compare 7 ok$' "$node_log"; then
+    record authority-contract-comparison FAIL "node compare 7 ok missing; see $node_log"
+    return
+  fi
+  if [[ ! -f "$EVIDENCE/cross-language-agreement.log" ]] || ! grep -Fxq 'compare 7 ok' "$EVIDENCE/cross-language-agreement.log"; then
+    record authority-contract-comparison FAIL "agreement missing exact compare 7 ok; see $EVIDENCE/cross-language-agreement.log"
+    return
+  fi
+  record authority-contract-comparison PASS "rust python node compare 7 ok"
 }
 
 record_benchmarks() {
@@ -339,18 +365,23 @@ path = "src/dump_canonicalize.rs"
 name = "dump-hmac"
 path = "src/dump_hmac.rs"
 
+[[bin]]
+name = "dump-compare"
+path = "src/dump_compare.rs"
+
 [dependencies]
 agent-receipts = { path = "$REPO_ROOT/crates/core" }
 serde_json = "1"
 EOF
   cp "$SCRIPT_DIR/dump_canonicalize.rs" "$dump_dir/src/dump_canonicalize.rs"
   cp "$SCRIPT_DIR/dump_hmac.rs" "$dump_dir/src/dump_hmac.rs"
-  rm -f "$dump_bin" "$hmac_bin"
+  cp "$SCRIPT_DIR/dump_compare.rs" "$dump_dir/src/dump_compare.rs"
+  rm -f "$dump_bin" "$hmac_bin" "$dump_dir/target/debug/dump-compare"
   if ! cargo build --manifest-path "$dump_dir/Cargo.toml" --target-dir "$dump_dir/target"; then
     echo "dump-canonicalize cargo build failed" >&2
     return 1
   fi
-  if [[ ! -x "$dump_bin" || ! -x "$hmac_bin" ]]; then
+  if [[ ! -x "$dump_bin" || ! -x "$hmac_bin" || ! -x "$dump_dir/target/debug/dump-compare" ]]; then
     echo "dump binaries missing under $dump_dir/target/debug" >&2
     return 1
   fi
@@ -376,7 +407,10 @@ run_agreement() {
       --node-dump "$SCRIPT_DIR/dump_canonicalize.cjs" \
       --rust-hmac-dump "$EVIDENCE/dump-canonicalize/target/debug/dump-hmac" \
       --python-hmac-dump "$SCRIPT_DIR/dump_hmac.py" \
-      --node-hmac-dump "$SCRIPT_DIR/dump_hmac.cjs"
+      --node-hmac-dump "$SCRIPT_DIR/dump_hmac.cjs" \
+      --rust-compare-dump "$EVIDENCE/dump-canonicalize/target/debug/dump-compare" \
+      --python-compare-dump "$SCRIPT_DIR/dump_compare.py" \
+      --node-compare-dump "$SCRIPT_DIR/dump_compare.cjs"
   ) >"$logf" 2>&1
 }
 
@@ -492,7 +526,7 @@ else
 fi
 
 record_hmac
-record_reserved authority-contract-comparison 'compare_authority_contracts|compareAuthorityContracts'
+record_authority
 record_reserved async-streaming-verifier 'async[[:space:]]+fn'
 record_benchmarks
 record_pending_kinds

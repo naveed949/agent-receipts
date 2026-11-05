@@ -7,7 +7,7 @@ python_log_hmac_ok() {
   if grep -qE '[1-9][0-9]* failed' "$log"; then
     return 1
   fi
-  grep -qE '=+ [1-9][0-9]* passed in [0-9.]+s' "$log"
+  grep -qE '=+ [1-9][0-9]* passed(, [0-9]+ skipped)? in [0-9.]+s' "$log"
 }
 
 agreement_hmac_ok() {
