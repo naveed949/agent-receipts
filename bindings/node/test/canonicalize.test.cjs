@@ -3,19 +3,73 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
-const { canonicalJson, stableHash } = require("..");
+const {
+  auditSigningKey,
+  canonicalJson,
+  controlledSigningKey,
+  resignAuditReceipt,
+  signControlledIntegrity,
+  stableHash,
+  verifyAuditReceipt,
+  verifyControlledIntegrity,
+} = require("..");
 
 const referenceDir = path.join(__dirname, "..", "..", "..", "vectors", "reference");
+
+test("verify never throws", () => {
+  const root = loadReference();
+  const row = root.vectors.find((item) => item.name === "hmac-audit-receipt-valid");
+  assert.equal(verifyAuditReceipt(row.input.receipt, 1), false);
+  assert.equal(verifyAuditReceipt(null, row.input.signingKeyUtf8), false);
+  assert.equal(verifyControlledIntegrity({ a: "x" }, 1, "synthetic-key-1", {}), false);
+  assert.equal(
+    verifyControlledIntegrity({ a: "x" }, row.input.signingKeyUtf8, 1, {}),
+    false,
+  );
+  const throwing = structuredClone(row.input.receipt);
+  Object.defineProperty(throwing, "version", {
+    enumerable: true,
+    get() {
+      throw new Error("boom");
+    },
+  });
+  assert.equal(verifyAuditReceipt(throwing, row.input.signingKeyUtf8), false);
+});
+
+test("gondolinHttps is v1 only", () => {
+  const root = loadReference();
+  const catalog = loadCatalog(root.vectors);
+  const spec = JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, "..", "..", "..", "vectors", "hmac", "gondolin-https.json"),
+      "utf8",
+    ),
+  );
+  const markedV1 = structuredClone(catalog.v1Receipt);
+  markedV1.gondolinHttps = true;
+  assert.equal(
+    verifyAuditReceipt(resignAuditReceipt(markedV1, catalog.v1Key), catalog.v1Key),
+    spec.expected.v1WithGondolinHttpsResigned,
+  );
+  const markedV2 = structuredClone(catalog.v2Allowed);
+  markedV2.gondolinHttps = true;
+  assert.equal(
+    verifyAuditReceipt(resignAuditReceipt(markedV2, catalog.v2Key), catalog.v2Key),
+    spec.expected.v2WithGondolinHttpsResigned,
+  );
+});
 
 test("reference vectors", () => {
   const root = loadReference();
   const allow = readAllowlist(path.join(referenceDir, "pending-kinds.txt"));
   const rows = root.vectors;
   assert.equal(root.count, rows.length);
-  assert.equal(rows.length, 20);
+  assert.equal(rows.length, 23);
+  const catalog = loadCatalog(rows);
   const pendingLines = [];
   const seen = [];
   let canonicalOk = 0;
+  let hmacOk = 0;
   const failures = [];
   for (const row of rows) {
     const name = requireString(row, "name", failures);
@@ -27,6 +81,15 @@ test("reference vectors", () => {
       try {
         checkCanonicalize(row, name);
         canonicalOk += 1;
+      } catch (err) {
+        failures.push(`${name} ${err.message}`);
+      }
+      continue;
+    }
+    if (kind === "controlled-integrity" || kind === "audit.verifyAuditReceipt") {
+      try {
+        checkHmacRow(row, name, catalog);
+        hmacOk += 1;
       } catch (err) {
         failures.push(`${name} ${err.message}`);
       }
@@ -46,14 +109,22 @@ test("reference vectors", () => {
       failures.push(`unused pending kind ${kind}`);
     }
   }
-  if (canonicalOk !== 8 || pendingLines.length !== 12 || canonicalOk + pendingLines.length !== 20) {
-    failures.push(`counts canonicalize ${canonicalOk} pending ${pendingLines.length}`);
+  if (
+    canonicalOk !== 8 ||
+    hmacOk !== 8 ||
+    pendingLines.length !== 7 ||
+    canonicalOk + hmacOk + pendingLines.length !== 23
+  ) {
+    failures.push(
+      `counts canonicalize ${canonicalOk} hmac ${hmacOk} pending ${pendingLines.length}`,
+    );
   }
   for (const line of pendingLines) {
     console.log(line);
   }
   console.log(`pending ${pendingLines.length}`);
   console.log(`canonicalize ${canonicalOk} ok`);
+  console.log(`hmac ${hmacOk} ok`);
   assert.deepEqual(failures, []);
 });
 
@@ -390,4 +461,305 @@ function nestObjects(depth) {
     value = { k: value };
   }
   return value;
+}
+
+function loadCatalog(rows) {
+  const catalog = {};
+  for (const row of rows) {
+    if (row.name === "hmac-audit-receipt-valid") {
+      catalog.v1Receipt = row.input.receipt;
+      catalog.v1Key = row.input.signingKeyUtf8;
+    }
+    if (row.name === "linkage-version-rules") {
+      catalog.v2Allowed = row.input.v2AllowedReceipt;
+      catalog.v2Denied = row.input.v2DeniedReceipt;
+      catalog.v2Key = row.input.signingKeyUtf8;
+    }
+  }
+  return catalog;
+}
+
+function checkHmacRow(row, name, catalog) {
+  switch (name) {
+    case "hmac-controlled-sign-and-verify":
+      checkControlled(row);
+      return;
+    case "hmac-audit-receipt-valid":
+      checkAuditValid(row);
+      return;
+    case "hmac-audit-receipt-failures":
+      checkAuditFailures(row, catalog);
+      return;
+    case "hmac-audit-keyid-swap":
+      checkKeyIdSwap(row, catalog);
+      return;
+    case "hmac-audit-v1-artifact-hash-mismatch":
+      checkV1HashMismatch(row, catalog);
+      return;
+    case "hmac-key-encoding-and-length":
+      checkKeyEncoding(row, catalog);
+      return;
+    case "linkage-version-rules":
+      checkLinkage(row, catalog);
+      return;
+    case "hmac-audit-pre124-restamp":
+      checkRestamp(row);
+      return;
+    default:
+      throw new Error(`unimplemented ${name}`);
+  }
+}
+
+function checkControlled(row) {
+  const key = row.input.signingKeyUtf8;
+  const keyId = row.input.keyId;
+  const value = decode(row.input.value);
+  const evidence = signControlledIntegrity(value, key, keyId);
+  assert.equal(
+    evidence.integrityDigest,
+    row.expected.sign.evidence.integrityDigest,
+  );
+  const cases = row.input.verifyCases;
+  for (const [label, want] of Object.entries(row.expected.verify)) {
+    const got =
+      label === "tamperedValue"
+        ? verifyControlledIntegrity({ a: "y", b: [1, 2] }, key, keyId, cases.valid)
+        : verifyControlledIntegrity(value, key, keyId, cases[label]);
+    assert.equal(got, want, label);
+  }
+}
+
+function checkAuditValid(row) {
+  const key = row.input.signingKeyUtf8;
+  const receipt = row.input.receipt;
+  assert.equal(verifyAuditReceipt(receipt, key), row.expected.result);
+  const document = structuredClone(receipt);
+  delete document.integrity.signature;
+  assert.equal(stableHash(document), row.expected.macInputAscii);
+  const restamped = resignAuditReceipt(receipt, key);
+  assert.equal(restamped.integrity.signature, receipt.integrity.signature);
+}
+
+function checkAuditFailures(row, catalog) {
+  const key = catalog.v1Key;
+  const receipt = catalog.v1Receipt;
+  const expected = row.expected;
+  const tampered = structuredClone(receipt);
+  tampered.outcome = "allowed";
+  assert.equal(verifyAuditReceipt(tampered, key), expected.tamperedOutcome);
+  assert.equal(
+    verifyAuditReceipt(receipt, "synthetic-audit-key-WRONG-0000000"),
+    expected.wrongKey,
+  );
+  const upper = structuredClone(receipt);
+  upper.integrity.signature = upper.integrity.signature.toUpperCase();
+  assert.equal(verifyAuditReceipt(upper, key), expected.uppercaseSignature);
+  const marked = structuredClone(receipt);
+  marked.authorityPolicyVersion = "2";
+  assert.equal(
+    verifyAuditReceipt(resignAuditReceipt(marked, key), key),
+    expected.v2DiscriminatorResigned,
+  );
+  assert.equal(verifyAuditReceipt(null, key), expected.nullReceipt);
+  const missing = structuredClone(receipt);
+  delete missing.integrity;
+  assert.equal(verifyAuditReceipt(missing, key), expected.missingIntegrity);
+}
+
+function checkKeyIdSwap(row, catalog) {
+  const receipt = catalog.v1Receipt;
+  const key = catalog.v1Key;
+  const swapped = structuredClone(receipt);
+  swapped.integrity.keyId = "synthetic-key-b";
+  assert.equal(
+    verifyAuditReceipt(swapped, key),
+    row.expected.swappedKeyIdOldSignature,
+  );
+  assert.equal(verifyAuditReceipt(receipt, key), row.expected.control_unchanged);
+}
+
+function checkV1HashMismatch(row, catalog) {
+  const key = catalog.v1Key;
+  const mismatched = structuredClone(catalog.v1Receipt);
+  mismatched.artifacts.request.hash = "0".repeat(64);
+  assert.equal(
+    verifyAuditReceipt(resignAuditReceipt(mismatched, key), key),
+    row.expected.mismatchReMaced,
+  );
+  assert.equal(
+    verifyAuditReceipt(resignAuditReceipt(catalog.v1Receipt, key), key),
+    row.expected.control_reMacedUnchanged,
+  );
+}
+
+function checkKeyEncoding(row, catalog) {
+  const key = catalog.v1Key;
+  const expected = row.expected;
+  assert.equal(
+    verifyAuditReceipt(catalog.v1Receipt, Buffer.from(key, "utf8")),
+    expected.keyAsUtf8Bytes,
+  );
+  const resigned = resignAuditReceipt(catalog.v1Receipt, "short");
+  assert.equal(verifyAuditReceipt(resigned, "short"), expected.fiveCharKey);
+  assert.throws(
+    () => auditSigningKey("short"),
+    (err) => {
+      assert.equal(err.message, expected.runtimeRejectsShortKey.error.message);
+      return true;
+    },
+  );
+  const eight = "é".repeat(8);
+  assert.throws(
+    () => auditSigningKey(eight),
+    (err) => {
+      assert.equal(err.message, expected.runtimeEightNonAsciiChars.error.message);
+      return true;
+    },
+  );
+  controlledSigningKey(eight);
+  assert.throws(
+    () => controlledSigningKey(Buffer.from("a".repeat(15))),
+    (err) => {
+      assert.equal(err.message, expected.controlledFifteenByteKey.error.message);
+      return true;
+    },
+  );
+}
+
+function checkLinkage(row, catalog) {
+  const expected = row.expected;
+  const key = catalog.v2Key;
+  assert.equal(verifyAuditReceipt(catalog.v2Allowed, key), expected.v2AllowedReceipt);
+  assert.equal(verifyAuditReceipt(catalog.v2Denied, key), expected.v2DeniedReceipt);
+  for (const [label, want] of Object.entries(expected.v2Mutations)) {
+    const mutated = applyV2Mutation(catalog.v2Allowed, label);
+    const got = verifyAuditReceipt(resignAuditReceipt(mutated, key), key);
+    assert.equal(got, want, `v2 ${label}`);
+  }
+  const v1Key = catalog.v1Key;
+  for (const [label, want] of Object.entries(expected.v1Mutations)) {
+    const mutated = applyV1Mutation(catalog.v1Receipt, label);
+    const got = verifyAuditReceipt(resignAuditReceipt(mutated, v1Key), v1Key);
+    assert.equal(got, want, `v1 ${label}`);
+  }
+}
+
+function checkRestamp(row) {
+  const expected = row.expected;
+  for (const label of ["v1", "v2"]) {
+    const key = row.input[label].signingKeyUtf8;
+    const receipt = row.input[label].receipt;
+    assert.equal(verifyAuditReceipt(receipt, key), expected[`${label}AsIssued`]);
+    const restamped = resignAuditReceipt(receipt, key);
+    assert.equal(verifyAuditReceipt(restamped, key), expected[`${label}Restamped`]);
+    assert.equal(
+      restamped.integrity.signature,
+      expected[`${label}RestampedSignature`],
+    );
+  }
+}
+
+function applyV2Mutation(receipt, label) {
+  const next = structuredClone(receipt);
+  if (label === "resignedUnchanged_control") {
+    return next;
+  }
+  if (label === "versionTagV1WithMarker2") {
+    next.version = "adaptive-sandbox.audit-receipt/v1";
+    return next;
+  }
+  if (label === "markerRemovedV2Tag") {
+    delete next.authorityPolicyVersion;
+    return next;
+  }
+  if (label === "marker3") {
+    next.authorityPolicyVersion = "3";
+    return next;
+  }
+  if (label === "policyArtifactVersionLabel1") {
+    next.artifacts.policy.version = "1";
+    return next;
+  }
+  if (label === "planEnvelopeVersion1") {
+    next.artifacts.plan.value.authority.version = "1";
+    return refreshHashes(next);
+  }
+  if (label === "planAuthorityHashUppercase") {
+    next.artifacts.plan.value.authorityHash =
+      next.artifacts.plan.value.authorityHash.toUpperCase();
+    return next;
+  }
+  if (label === "artifactHashMismatch") {
+    next.artifacts.policy.hash = "0".repeat(64);
+    return next;
+  }
+  if (label === "argumentAuthorityVersion1") {
+    next.artifacts.plan.value.argumentAuthority.version = "1";
+    return refreshHashes(next);
+  }
+  if (label === "backendMarker1") {
+    next.artifacts.backend.value.authorityPolicyVersion = "1";
+    return refreshHashes(next);
+  }
+  if (label === "backendAuthorityVersion1") {
+    next.artifacts.backend.value.authority.version = "1";
+    return refreshHashes(next);
+  }
+  if (label.startsWith("policyLayer_") && label.endsWith("_version1")) {
+    const layer = label.slice("policyLayer_".length, -"_version1".length);
+    next.artifacts.policy.value[layer].version = "1";
+    return refreshHashes(next);
+  }
+  if (label === "contractGrantsVersion1") {
+    next.artifacts.contract.value.authority.grants.version = "1";
+    return refreshHashes(next);
+  }
+  if (label === "requestAgentAuthorityVersion1") {
+    next.artifacts.request.value.agent.authority.version = "1";
+    return refreshHashes(next);
+  }
+  if (label === "requestSessionAuthorityVersion1") {
+    next.artifacts.request.value.session.authority.version = "1";
+    return refreshHashes(next);
+  }
+  if (label === "grantedDiffersFromEnvelope") {
+    next.authority.granted.authority.network = {};
+    return next;
+  }
+  if (label === "grantedRemoved") {
+    delete next.authority.granted.authority;
+    return next;
+  }
+  throw new Error(`unknown v2 mutation ${label}`);
+}
+
+function applyV1Mutation(receipt, label) {
+  const next = structuredClone(receipt);
+  if (label === "resignedUnchanged_control") {
+    return next;
+  }
+  if (label === "versionTagV2NoMarker") {
+    next.version = "adaptive-sandbox.audit-receipt/v2";
+    return next;
+  }
+  if (label === "planEnvelopeVersion2") {
+    next.artifacts.plan.value.authority = { version: "2" };
+    return refreshHashes(next);
+  }
+  if (label === "planEnvelopeVersion1Explicit") {
+    next.artifacts.plan.value.authority = { version: "1" };
+    return refreshHashes(next);
+  }
+  if (label === "grantedVersion2") {
+    next.authority.granted.authority = { version: "2" };
+    return next;
+  }
+  throw new Error(`unknown v1 mutation ${label}`);
+}
+
+function refreshHashes(receipt) {
+  for (const entry of Object.values(receipt.artifacts)) {
+    entry.hash = stableHash(entry.value);
+  }
+  return receipt;
 }

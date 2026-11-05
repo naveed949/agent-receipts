@@ -1,4 +1,5 @@
 import base64
+import copy
 import json
 import math
 from datetime import datetime
@@ -6,7 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from agent_receipts import CanonicalizeError, canonical_json, stable_hash
+from agent_receipts import (
+    CanonicalizeError,
+    audit_signing_key,
+    canonical_json,
+    controlled_signing_key,
+    resign_audit_receipt,
+    sign_controlled_integrity,
+    stable_hash,
+    verify_audit_receipt,
+    verify_controlled_integrity,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 REFERENCE = ROOT / "vectors" / "reference"
@@ -37,19 +48,46 @@ def test_exports():
     assert not hasattr(__import__("agent_receipts"), "canonicalize_bytes")
 
 
+def test_verify_never_raises():
+    assert verify_audit_receipt(None, "synthetic-audit-key-0123456789ab") is False
+    assert verify_audit_receipt({"version": "nope"}, 1) is False
+    assert verify_controlled_integrity({"a": "x"}, "synthetic-controlled-key-0001", 1, {}) is False
+    assert verify_controlled_integrity(None, None, None, None) is False
+
+
+def test_gondolin_https_is_v1_only():
+    root = json.loads((REFERENCE / "vectors.json").read_text(encoding="utf-8"))
+    catalog = load_catalog(root["vectors"])
+    spec = json.loads((ROOT / "vectors" / "hmac" / "gondolin-https.json").read_text(encoding="utf-8"))
+    marked_v1 = copy.deepcopy(catalog["v1_receipt"])
+    marked_v1["gondolinHttps"] = True
+    assert (
+        verify_audit_receipt(resign_audit_receipt(marked_v1, catalog["v1_key"]), catalog["v1_key"])
+        is spec["expected"]["v1WithGondolinHttpsResigned"]
+    )
+    marked_v2 = copy.deepcopy(catalog["v2_allowed"])
+    marked_v2["gondolinHttps"] = True
+    assert (
+        verify_audit_receipt(resign_audit_receipt(marked_v2, catalog["v2_key"]), catalog["v2_key"])
+        is spec["expected"]["v2WithGondolinHttpsResigned"]
+    )
+
+
 def test_reference_vectors(capsys):
     failures = []
     root = load_reference()
     allow = read_allowlist(REFERENCE / "pending-kinds.txt")
     count = root["count"]
     rows = root["vectors"]
-    if count != len(rows) or len(rows) != 20:
+    if count != len(rows) or len(rows) != 23:
         failures.append(f"count {count} len {len(rows)}")
         rows = []
 
+    catalog = load_catalog(rows)
     pending_lines = []
     seen = []
     canonical_ok = 0
+    hmac_ok = 0
     for row in rows:
         name = require_str(row, "name", failures)
         kind = require_str(row, "kind", failures)
@@ -63,6 +101,14 @@ def test_reference_vectors(capsys):
             else:
                 canonical_ok += 1
             continue
+        if kind in ("controlled-integrity", "audit.verifyAuditReceipt"):
+            try:
+                check_hmac_row(row, name, catalog)
+            except Exception as err:
+                failures.append(f"{name} {err}")
+            else:
+                hmac_ok += 1
+            continue
         if kind not in allow:
             failures.append(f"unknown kind {kind}")
             continue
@@ -73,18 +119,25 @@ def test_reference_vectors(capsys):
         if kind not in seen:
             failures.append(f"unused pending kind {kind}")
     if rows and (
-        canonical_ok != 8 or len(pending_lines) != 12 or canonical_ok + len(pending_lines) != 20
+        canonical_ok != 8
+        or hmac_ok != 8
+        or len(pending_lines) != 7
+        or canonical_ok + hmac_ok + len(pending_lines) != 23
     ):
-        failures.append(f"counts canonicalize {canonical_ok} pending {len(pending_lines)}")
+        failures.append(
+            f"counts canonicalize {canonical_ok} hmac {hmac_ok} pending {len(pending_lines)}"
+        )
     for line in pending_lines:
         print(line)
     print(f"pending {len(pending_lines)}")
     print(f"canonicalize {canonical_ok} ok")
+    print(f"hmac {hmac_ok} ok")
     captured = capsys.readouterr().out
     for line in pending_lines:
         assert line in captured
     assert f"pending {len(pending_lines)}\n" in captured
     assert f"canonicalize {canonical_ok} ok\n" in captured
+    assert f"hmac {hmac_ok} ok\n" in captured
     assert not failures, "\n".join(failures)
 
 
@@ -384,3 +437,258 @@ def nest_objects(depth):
     for _ in range(1, depth):
         value = {"k": value}
     return value
+
+
+def load_catalog(rows):
+    catalog = {}
+    for row in rows:
+        if row.get("name") == "hmac-audit-receipt-valid":
+            catalog["v1_receipt"] = row["input"]["receipt"]
+            catalog["v1_key"] = row["input"]["signingKeyUtf8"]
+        if row.get("name") == "linkage-version-rules":
+            catalog["v2_allowed"] = row["input"]["v2AllowedReceipt"]
+            catalog["v2_denied"] = row["input"]["v2DeniedReceipt"]
+            catalog["v2_key"] = row["input"]["signingKeyUtf8"]
+    return catalog
+
+
+def check_hmac_row(row, name, catalog):
+    if name == "hmac-controlled-sign-and-verify":
+        check_controlled(row)
+        return
+    if name == "hmac-audit-receipt-valid":
+        check_audit_valid(row)
+        return
+    if name == "hmac-audit-receipt-failures":
+        check_audit_failures(row, catalog)
+        return
+    if name == "hmac-audit-keyid-swap":
+        check_keyid_swap(row, catalog)
+        return
+    if name == "hmac-audit-v1-artifact-hash-mismatch":
+        check_v1_hash_mismatch(row, catalog)
+        return
+    if name == "hmac-key-encoding-and-length":
+        check_key_encoding(row, catalog)
+        return
+    if name == "linkage-version-rules":
+        check_linkage(row, catalog)
+        return
+    if name == "hmac-audit-pre124-restamp":
+        check_restamp(row)
+        return
+    raise AssertionError(f"unimplemented {name}")
+
+
+def check_controlled(row):
+    key = row["input"]["signingKeyUtf8"]
+    key_id = row["input"]["keyId"]
+    value = decode(row["input"]["value"])
+    evidence = sign_controlled_integrity(value, key, key_id)
+    assert evidence["integrityDigest"] == row["expected"]["sign"]["evidence"]["integrityDigest"]
+    cases = row["input"]["verifyCases"]
+    expected = row["expected"]["verify"]
+    for label, case in cases.items():
+        if label == "tamperedValue":
+            target = {"a": "y", "b": [1, 2]}
+            got = verify_controlled_integrity(target, key, key_id, cases["valid"])
+        else:
+            got = verify_controlled_integrity(value, key, key_id, case)
+        assert got is expected[label]
+
+
+def check_audit_valid(row):
+    key = row["input"]["signingKeyUtf8"]
+    receipt = row["input"]["receipt"]
+    assert verify_audit_receipt(receipt, key) is row["expected"]["result"]
+    document = copy.deepcopy(receipt)
+    del document["integrity"]["signature"]
+    assert stable_hash(document) == row["expected"]["macInputAscii"]
+    restamped = resign_audit_receipt(receipt, key)
+    assert restamped["integrity"]["signature"] == receipt["integrity"]["signature"]
+
+
+def check_audit_failures(row, catalog):
+    key = catalog["v1_key"]
+    receipt = catalog["v1_receipt"]
+    expected = row["expected"]
+    tampered = copy.deepcopy(receipt)
+    tampered["outcome"] = "allowed"
+    assert verify_audit_receipt(tampered, key) is expected["tamperedOutcome"]
+    assert (
+        verify_audit_receipt(receipt, "synthetic-audit-key-WRONG-0000000") is expected["wrongKey"]
+    )
+    upper = copy.deepcopy(receipt)
+    upper["integrity"]["signature"] = upper["integrity"]["signature"].upper()
+    assert verify_audit_receipt(upper, key) is expected["uppercaseSignature"]
+    marked = copy.deepcopy(receipt)
+    marked["authorityPolicyVersion"] = "2"
+    assert (
+        verify_audit_receipt(resign_audit_receipt(marked, key), key)
+        is expected["v2DiscriminatorResigned"]
+    )
+    assert verify_audit_receipt(None, key) is expected["nullReceipt"]
+    missing = copy.deepcopy(receipt)
+    del missing["integrity"]
+    assert verify_audit_receipt(missing, key) is expected["missingIntegrity"]
+
+
+def check_keyid_swap(row, catalog):
+    receipt = copy.deepcopy(catalog["v1_receipt"])
+    key = catalog["v1_key"]
+    swapped = copy.deepcopy(receipt)
+    swapped["integrity"]["keyId"] = "synthetic-key-b"
+    assert verify_audit_receipt(swapped, key) is row["expected"]["swappedKeyIdOldSignature"]
+    assert verify_audit_receipt(receipt, key) is row["expected"]["control_unchanged"]
+
+
+def check_v1_hash_mismatch(row, catalog):
+    key = catalog["v1_key"]
+    mismatched = copy.deepcopy(catalog["v1_receipt"])
+    mismatched["artifacts"]["request"]["hash"] = "0" * 64
+    mismatched = resign_audit_receipt(mismatched, key)
+    assert verify_audit_receipt(mismatched, key) is row["expected"]["mismatchReMaced"]
+    control = resign_audit_receipt(catalog["v1_receipt"], key)
+    assert verify_audit_receipt(control, key) is row["expected"]["control_reMacedUnchanged"]
+
+
+def check_key_encoding(row, catalog):
+    key = catalog["v1_key"]
+    expected = row["expected"]
+    assert verify_audit_receipt(catalog["v1_receipt"], key.encode("utf-8")) is expected[
+        "keyAsUtf8Bytes"
+    ]
+    short = "short"
+    resigned = resign_audit_receipt(catalog["v1_receipt"], short)
+    assert verify_audit_receipt(resigned, short) is expected["fiveCharKey"]
+    try:
+        audit_signing_key(short)
+    except TypeError as err:
+        assert str(err) == expected["runtimeRejectsShortKey"]["error"]["message"]
+    else:
+        raise AssertionError("runtimeRejectsShortKey accepted")
+    eight = "é" * 8
+    try:
+        audit_signing_key(eight)
+    except TypeError as err:
+        assert str(err) == expected["runtimeEightNonAsciiChars"]["error"]["message"]
+    else:
+        raise AssertionError("runtimeEightNonAsciiChars accepted")
+    controlled_signing_key(eight)
+    try:
+        controlled_signing_key(b"a" * 15)
+    except ValueError as err:
+        assert str(err) == expected["controlledFifteenByteKey"]["error"]["message"]
+    else:
+        raise AssertionError("controlledFifteenByteKey accepted")
+
+
+def check_linkage(row, catalog):
+    expected = row["expected"]
+    key = catalog["v2_key"]
+    assert verify_audit_receipt(catalog["v2_allowed"], key) is expected["v2AllowedReceipt"]
+    assert verify_audit_receipt(catalog["v2_denied"], key) is expected["v2DeniedReceipt"]
+    for label, want in expected["v2Mutations"].items():
+        mutated = apply_v2_mutation(catalog["v2_allowed"], label)
+        got = verify_audit_receipt(resign_audit_receipt(mutated, key), key)
+        assert got is want, f"v2 {label} {got} != {want}"
+    v1_key = catalog["v1_key"]
+    for label, want in expected["v1Mutations"].items():
+        mutated = apply_v1_mutation(catalog["v1_receipt"], label)
+        got = verify_audit_receipt(resign_audit_receipt(mutated, v1_key), v1_key)
+        assert got is want, f"v1 {label} {got} != {want}"
+
+
+def check_restamp(row):
+    expected = row["expected"]
+    for label in ("v1", "v2"):
+        case = row["input"][label]
+        key = case["signingKeyUtf8"]
+        receipt = case["receipt"]
+        assert verify_audit_receipt(receipt, key) is expected[f"{label}AsIssued"]
+        restamped = resign_audit_receipt(receipt, key)
+        assert verify_audit_receipt(restamped, key) is expected[f"{label}Restamped"]
+        assert restamped["integrity"]["signature"] == expected[f"{label}RestampedSignature"]
+
+
+def apply_v2_mutation(receipt, label):
+    receipt = copy.deepcopy(receipt)
+    if label == "resignedUnchanged_control":
+        return receipt
+    if label == "versionTagV1WithMarker2":
+        receipt["version"] = "adaptive-sandbox.audit-receipt/v1"
+        return receipt
+    if label == "markerRemovedV2Tag":
+        del receipt["authorityPolicyVersion"]
+        return receipt
+    if label == "marker3":
+        receipt["authorityPolicyVersion"] = "3"
+        return receipt
+    if label == "policyArtifactVersionLabel1":
+        receipt["artifacts"]["policy"]["version"] = "1"
+        return receipt
+    if label == "planEnvelopeVersion1":
+        receipt["artifacts"]["plan"]["value"]["authority"]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label == "planAuthorityHashUppercase":
+        receipt["artifacts"]["plan"]["value"]["authorityHash"] = receipt["artifacts"]["plan"][
+            "value"
+        ]["authorityHash"].upper()
+        return receipt
+    if label == "artifactHashMismatch":
+        receipt["artifacts"]["policy"]["hash"] = "0" * 64
+        return receipt
+    if label == "argumentAuthorityVersion1":
+        receipt["artifacts"]["plan"]["value"]["argumentAuthority"]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label == "backendMarker1":
+        receipt["artifacts"]["backend"]["value"]["authorityPolicyVersion"] = "1"
+        return refresh_hashes(receipt)
+    if label == "backendAuthorityVersion1":
+        receipt["artifacts"]["backend"]["value"]["authority"]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label.startswith("policyLayer_") and label.endswith("_version1"):
+        layer = label[len("policyLayer_") : -len("_version1")]
+        receipt["artifacts"]["policy"]["value"][layer]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label == "contractGrantsVersion1":
+        receipt["artifacts"]["contract"]["value"]["authority"]["grants"]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label == "requestAgentAuthorityVersion1":
+        receipt["artifacts"]["request"]["value"]["agent"]["authority"]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label == "requestSessionAuthorityVersion1":
+        receipt["artifacts"]["request"]["value"]["session"]["authority"]["version"] = "1"
+        return refresh_hashes(receipt)
+    if label == "grantedDiffersFromEnvelope":
+        receipt["authority"]["granted"]["authority"]["network"] = {}
+        return receipt
+    if label == "grantedRemoved":
+        del receipt["authority"]["granted"]["authority"]
+        return receipt
+    raise AssertionError(f"unknown v2 mutation {label}")
+
+
+def apply_v1_mutation(receipt, label):
+    receipt = copy.deepcopy(receipt)
+    if label == "resignedUnchanged_control":
+        return receipt
+    if label == "versionTagV2NoMarker":
+        receipt["version"] = "adaptive-sandbox.audit-receipt/v2"
+        return receipt
+    if label == "planEnvelopeVersion2":
+        receipt["artifacts"]["plan"]["value"]["authority"] = {"version": "2"}
+        return refresh_hashes(receipt)
+    if label == "planEnvelopeVersion1Explicit":
+        receipt["artifacts"]["plan"]["value"]["authority"] = {"version": "1"}
+        return refresh_hashes(receipt)
+    if label == "grantedVersion2":
+        receipt["authority"]["granted"]["authority"] = {"version": "2"}
+        return receipt
+    raise AssertionError(f"unknown v1 mutation {label}")
+
+
+def refresh_hashes(receipt):
+    for entry in receipt["artifacts"].values():
+        entry["hash"] = stable_hash(entry["value"])
+    return receipt

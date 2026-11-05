@@ -2,7 +2,10 @@ use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
-use agent_receipts::{canonical_json, stable_hash};
+use agent_receipts::{
+    canonical_json, resign_audit_receipt_bytes, stable_hash, verify_audit_receipt_bytes,
+    verify_controlled_integrity_bytes,
+};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use sha2::{Digest, Sha256};
@@ -48,6 +51,34 @@ fn corpus_returns_result_and_ok_is_idempotent() {
                 }
             }
         }
+        probe_hmac(&input);
+    }
+}
+
+fn probe_hmac(input: &[u8]) {
+    let verified = catch_unwind(AssertUnwindSafe(|| {
+        verify_audit_receipt_bytes(input, input)
+    }));
+    match verified {
+        Ok(_) => {}
+        Err(_) => panic!("verify_audit_receipt_bytes panicked on {}", prefix(input)),
+    }
+    let resigned = catch_unwind(AssertUnwindSafe(|| {
+        resign_audit_receipt_bytes(input, input)
+    }));
+    match resigned {
+        Ok(_) => {}
+        Err(_) => panic!("resign_audit_receipt_bytes panicked on {}", prefix(input)),
+    }
+    let controlled = catch_unwind(AssertUnwindSafe(|| {
+        verify_controlled_integrity_bytes(input, input, "k", input)
+    }));
+    match controlled {
+        Ok(_) => {}
+        Err(_) => panic!(
+            "verify_controlled_integrity_bytes panicked on {}",
+            prefix(input)
+        ),
     }
 }
 

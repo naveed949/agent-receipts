@@ -10,7 +10,7 @@ The Python build produces one `cp39-abi3` wheel. That wheel loads on CPython 3.9
 
 ## Two vector directories
 
-`vectors/reference/vectors.json` is the file produced by the reference implementation. It is stored as generated. Eight rows have kind `canonicalize` and must match `canonicalUtf8Hex` and `stableHash`. The other rows are listed once each in `vectors/reference/pending-kinds.txt`. Runners print those rows and count them. Those kinds stay unimplemented.
+`vectors/reference/vectors.json` is the file produced by the reference implementation. It is stored as generated. The file has 23 rows. Eight rows have kind `canonicalize` and must match `canonicalUtf8Hex` and `stableHash`. Eight HMAC and linkage rows run in Rust, Python, and Node. The remaining rows are listed once each in `vectors/reference/pending-kinds.txt`. That allowlist is now only `compareAuthorityContracts`. Runners print those rows and count them.
 
 `vectors/text` holds byte-level cases. Invalid UTF-8, duplicate keys, and a second pass over canonical bytes still belong there. Node does not read that directory. A JavaScript value cannot represent those byte strings, and Node has no bytes entry.
 
@@ -56,4 +56,33 @@ Node returns a string from `canonicalJson` and `stableHash`. A buffer is `type_e
 
 ## Receipt
 
-`Receipt` is a public struct with a private field and no constructor. HMAC verification, authority-contract comparison, and an async streaming verifier are names reserved for later changes. They are not part of this API.
+`Receipt` is a public struct with a private field and no constructor. Authority-contract comparison and an async streaming verifier stay reserved. HMAC verification is part of this API.
+
+## 2026-11-05 HMAC verification
+
+HMAC-SHA256 is the only integrity algorithm. The core crate uses `hmac` 0.12.1, pinned the same way as `sha2`, and compares tags with `verify_slice`. That path is constant time. A byte-by-byte `==` on the hex string is not.
+
+The audit MAC is a double hash. `stable_hash` of the MAC document is 64 ASCII hex characters. HMAC then covers those 64 bytes, not the raw SHA-256 digest and not the canonical JSON. Signing the hex string keeps the MAC input a fixed-width public encoding. HMAC-SHA256 is not SHA-256, so length-extension of the inner hash does not forge a tag.
+
+This revision binds `integrity.algorithm` and `integrity.keyId` into the MAC. The document is the receipt with only `integrity.signature` removed. The earlier construction removed the whole `integrity` object, so a verifier could not tell a swapped key label or a swapped algorithm from the original receipt. That is a key-substitution attack and an algorithm-confusion attack. Receipts issued under the earlier preimage fail `verify_audit_receipt` until `resign_audit_receipt` restamps them with the same key. The restamp is a breaking change for stored receipts. It is not a change to `canonical_json` or `stable_hash`.
+
+Artifact hashes are rechecked for v1 and v2. A v1 receipt whose `artifacts.*.hash` does not match `stable_hash(value)` is false even when the MAC is valid.
+
+Audit signer length is measured in host units: UTF-16 code units for a string, bytes for a byte array. Controlled-integrity signer length is measured in UTF-8 bytes. Eight `é` characters fail the audit constructor and pass the controlled constructor. Verify accepts a five-character key. The split is what the reference does. This crate does not invent a single rule.
+
+Bindings copy the key into owned bytes, then call Rust. Python and Node do not implement HMAC. After `resign_audit_receipt` returns a `Json` tree, each binding emits canonical JSON and lets the host parser rebuild a value, because the inspectors on `Json` are crate-private.
+
+`compareAuthorityContracts` is still pending.
+
+## 2026-11-05 Key material lifetime
+
+The core does not depend on `zeroize`. `audit_signing_key` and `controlled_signing_key` return `&[u8]` borrowed from the caller's buffer. Bindings copy the host key into an owned `Vec<u8>`, check the length, and hand a Python `bytes` or Node `Buffer` back to the caller. Nothing overwrites those bytes on drop. Dropping a `Vec<u8>` is not a wipe. Host-side copies stay until the language runtime reclaims them. Adding `zeroize` on the Rust `Vec` would still leave the Python and Node copies intact, so this revision documents the limit rather than adding a crate that cannot cover the host.
+
+## 2026-11-05 Signer length split
+
+The two constructors use different units. That is the reference rule, not a cryptographic claim.
+
+- Audit signer: a string is measured in UTF-16 code units; a byte array is measured in bytes. Either value below 16 is `ShortAuditKey`. Eight `é` characters are 8 UTF-16 units and 16 UTF-8 bytes, so the audit constructor rejects them. Verify has no floor: a five-character key that signed a receipt still verifies that receipt.
+- Controlled-integrity signer: always measured in UTF-8 bytes of the key material HMAC will use. Below 16 is `ShortControlledKey`. The same eight `é` characters pass. A 15-byte array fails.
+
+HMAC-SHA256 consumes the UTF-8 bytes. UTF-16 length is a host-string accident. Keep the split until one unit is chosen. If the constructors are unified later, 16 UTF-8 bytes is the unit that matches the MAC.

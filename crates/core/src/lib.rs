@@ -1,10 +1,19 @@
 mod emit;
-mod parse;
+mod hmac;
+pub(crate) mod parse;
 
 use std::cmp::Ordering;
 use std::fmt;
 
 use sha2::{Digest, Sha256};
+
+pub use hmac::{
+    audit_mac_input_ascii, audit_signing_key, controlled_signing_key, resign_audit_receipt,
+    resign_audit_receipt_bytes, sign_controlled_integrity, sign_controlled_integrity_bytes,
+    verify_audit_receipt, verify_audit_receipt_bytes, verify_controlled_integrity,
+    verify_controlled_integrity_bytes, SignerError, SigningKey, AUDIT_RECEIPT_V2_VERSION,
+    AUDIT_RECEIPT_VERSION, CONTROLLED_INTEGRITY_VERSION,
+};
 
 #[cfg(test)]
 mod reference;
@@ -149,6 +158,24 @@ impl Json {
             node: Node::Object(entries),
         })
     }
+
+    pub(crate) fn as_object(&self) -> Option<&[(Wtf16, Json)]> {
+        match &self.node {
+            Node::Object(entries) => Some(entries),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_string(&self) -> Option<&Wtf16> {
+        match &self.node {
+            Node::String(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_object(&self) -> bool {
+        matches!(self.node, Node::Object(_))
+    }
 }
 
 /// `depth` counts the container being entered. `128` succeeds and `129` is `too_deep`.
@@ -177,11 +204,14 @@ pub fn stable_hash_value(value: &Json) -> Result<String, Error> {
     Ok(sha256_hex(&canonical_json_value(value)?))
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    encode_hex(&Sha256::digest(bytes))
+}
+
+pub(crate) fn encode_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let digest = Sha256::digest(bytes);
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
         hex.push(char::from(HEX[usize::from(byte >> 4)]));
         hex.push(char::from(HEX[usize::from(byte & 0x0F)]));
     }
