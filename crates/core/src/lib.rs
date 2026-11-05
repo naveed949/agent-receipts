@@ -1,3 +1,4 @@
+mod authority;
 mod emit;
 mod hmac;
 pub(crate) mod parse;
@@ -7,6 +8,12 @@ use std::fmt;
 
 use sha2::{Digest, Sha256};
 
+pub use authority::{
+    compare_authority_contracts, compare_authority_contracts_bytes, is_https_authority_subset,
+    is_https_authority_subset_bytes, normalize_authority_policy, normalize_authority_policy_bytes,
+    normalize_https_authority_rules, normalize_https_authority_rules_bytes, AuthorityError,
+    AuthorityPath, CompareResult, Relationship,
+};
 pub use hmac::{
     audit_mac_input_ascii, audit_signing_key, controlled_signing_key, resign_audit_receipt,
     resign_audit_receipt_bytes, sign_controlled_integrity, sign_controlled_integrity_bytes,
@@ -166,9 +173,30 @@ impl Json {
         }
     }
 
+    pub(crate) fn as_array(&self) -> Option<&[Json]> {
+        match &self.node {
+            Node::Array(items) => Some(items),
+            _ => None,
+        }
+    }
+
     pub(crate) fn as_string(&self) -> Option<&Wtf16> {
         match &self.node {
             Node::String(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_bool(&self) -> Option<bool> {
+        match self.node {
+            Node::Bool(flag) => Some(flag),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_number(&self) -> Option<f64> {
+        match self.node {
+            Node::Number(finite) => Some(finite.get()),
             _ => None,
         }
     }

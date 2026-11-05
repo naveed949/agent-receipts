@@ -3,9 +3,10 @@ use std::path::PathBuf;
 
 use super::{
     audit_mac_input_ascii, audit_signing_key, canonical_json, canonical_json_value,
-    controlled_signing_key, parse::parse, resign_audit_receipt, sign_controlled_integrity,
-    stable_hash, stable_hash_value, verify_audit_receipt, verify_controlled_integrity, Error, Json,
-    Node, SignerError, SigningKey, Wtf16, AUDIT_RECEIPT_V2_VERSION, AUDIT_RECEIPT_VERSION,
+    compare_authority_contracts, controlled_signing_key, parse::parse, resign_audit_receipt,
+    sign_controlled_integrity, stable_hash, stable_hash_value, verify_audit_receipt,
+    verify_controlled_integrity, AuthorityPath, Error, Json, Node, SignerError, SigningKey, Wtf16,
+    AUDIT_RECEIPT_V2_VERSION, AUDIT_RECEIPT_VERSION,
 };
 
 #[test]
@@ -61,6 +62,7 @@ fn run() -> Result<(), String> {
     let mut failures = Vec::new();
     let mut canonical_ok = 0usize;
     let mut hmac_ok = 0usize;
+    let mut compare_ok = 0usize;
     for row in rows {
         let name = row_string(row, "name")?;
         let kind = row_string(row, "kind")?;
@@ -74,6 +76,13 @@ fn run() -> Result<(), String> {
         if kind == "controlled-integrity" || kind == "audit.verifyAuditReceipt" {
             match check_hmac_row(row, &name, &kind, &catalog) {
                 Ok(()) => hmac_ok += 1,
+                Err(err) => failures.push(err),
+            }
+            continue;
+        }
+        if kind == "compareAuthorityContracts" {
+            match check_compare(row, &name) {
+                Ok(()) => compare_ok += 1,
                 Err(err) => failures.push(err),
             }
             continue;
@@ -94,11 +103,12 @@ fn run() -> Result<(), String> {
     }
     if canonical_ok != 8
         || hmac_ok != 8
-        || pending_lines.len() != 7
-        || canonical_ok + hmac_ok + pending_lines.len() != 23
+        || compare_ok != 7
+        || !pending_lines.is_empty()
+        || canonical_ok + hmac_ok + compare_ok + pending_lines.len() != 23
     {
         failures.push(format!(
-            "counts canonicalize {canonical_ok} hmac {hmac_ok} pending {}",
+            "counts canonicalize {canonical_ok} hmac {hmac_ok} compare {compare_ok} pending {}",
             pending_lines.len()
         ));
     }
@@ -111,6 +121,96 @@ fn run() -> Result<(), String> {
     println!("pending {}", pending_lines.len());
     println!("canonicalize {canonical_ok} ok");
     println!("hmac {hmac_ok} ok");
+    println!("compare {compare_ok} ok");
+    Ok(())
+}
+
+fn check_compare(row: &Json, name: &str) -> Result<(), String> {
+    let expected = field(row, "expected");
+    let expected_error = field(row, "expectedError");
+    match (expected, expected_error) {
+        (Ok(_), Ok(_)) | (Err(_), Err(_)) => Err(format!("{name} needs expected or expectedError")),
+        (Ok(expected), Err(_)) => check_compare_success(row, name, expected),
+        (Err(_), Ok(expected_error)) => check_compare_rejections(row, name, expected_error),
+    }
+}
+
+fn check_compare_success(row: &Json, name: &str, expected: &Json) -> Result<(), String> {
+    let input = field(row, "input")?;
+    let previous = field(input, "previous")?;
+    let next = field(input, "next")?;
+    let got = compare_authority_contracts(previous, next)
+        .map_err(|err| format!("{name} {}", err.code()))?;
+    let want_rel = json_text(field(expected, "relationship")?)?;
+    if got.relationship.as_str() != want_rel {
+        return Err(format!(
+            "{name} relationship {} != {want_rel}",
+            got.relationship.as_str()
+        ));
+    }
+    check_paths(name, "widened", &got.widened, field(expected, "widened")?)?;
+    check_paths(
+        name,
+        "narrowed",
+        &got.narrowed,
+        field(expected, "narrowed")?,
+    )?;
+    Ok(())
+}
+
+fn check_paths(
+    name: &str,
+    label: &str,
+    got: &[AuthorityPath],
+    expected: &Json,
+) -> Result<(), String> {
+    let items = expect_array(expected)?;
+    if got.len() != items.len() {
+        return Err(format!(
+            "{name} {label} len {} != {}",
+            got.len(),
+            items.len()
+        ));
+    }
+    for (path, item) in got.iter().zip(items) {
+        let want = json_text(item)?;
+        if path.as_str() != want {
+            return Err(format!("{name} {label} {} != {want}", path.as_str()));
+        }
+    }
+    Ok(())
+}
+
+fn check_compare_rejections(row: &Json, name: &str, expected_error: &Json) -> Result<(), String> {
+    let input = field(row, "input")?;
+    let cases = expect_object(field(input, "cases")?)?;
+    let errors = expect_object(expected_error)?;
+    if cases.is_empty() {
+        return Err(format!("{name} has no rejection cases"));
+    }
+    if cases.len() != errors.len() {
+        return Err(format!("{name} rejection key count"));
+    }
+    for (key, child) in cases {
+        let label = key_text(key)?;
+        let Some(spec) = lookup(errors, key) else {
+            return Err(format!("{name} missing expected error for {label}"));
+        };
+        let type_name = json_text(field(spec, "type")?)?;
+        if type_name != "TypeError" {
+            return Err(format!("{name} {label} type {type_name}"));
+        }
+        let previous = field(child, "previous")?;
+        let next = field(child, "next")?;
+        if compare_authority_contracts(previous, next).is_ok() {
+            return Err(format!("{name} {label} accepted"));
+        }
+    }
+    for (key, _) in errors {
+        if lookup(cases, key).is_none() {
+            return Err(format!("{name} extra expected error {}", key_text(key)?));
+        }
+    }
     Ok(())
 }
 
@@ -296,7 +396,11 @@ fn is_digits(text: &str) -> bool {
 }
 
 fn read_allowlist(path: &std::path::Path) -> Result<Vec<String>, String> {
-    let text = fs::read_to_string(path).map_err(|err| format!("read pending kinds: {err}"))?;
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(format!("read pending kinds: {err}")),
+    };
     let mut lines = Vec::new();
     for raw in text.lines() {
         let line = raw.trim();

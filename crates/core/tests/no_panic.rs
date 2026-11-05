@@ -3,7 +3,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 use agent_receipts::{
-    canonical_json, resign_audit_receipt_bytes, stable_hash, verify_audit_receipt_bytes,
+    canonical_json, compare_authority_contracts_bytes, is_https_authority_subset_bytes,
+    normalize_authority_policy_bytes, normalize_https_authority_rules_bytes,
+    resign_audit_receipt_bytes, stable_hash, verify_audit_receipt_bytes,
     verify_controlled_integrity_bytes,
 };
 use base64::engine::general_purpose::STANDARD;
@@ -52,6 +54,48 @@ fn corpus_returns_result_and_ok_is_idempotent() {
             }
         }
         probe_hmac(&input);
+        probe_authority(&input);
+    }
+}
+
+fn probe_authority(input: &[u8]) {
+    let compared = catch_unwind(AssertUnwindSafe(|| {
+        compare_authority_contracts_bytes(input, input)
+    }));
+    match compared {
+        Ok(_) => {}
+        Err(_) => panic!(
+            "compare_authority_contracts_bytes panicked on {}",
+            prefix(input)
+        ),
+    }
+    let normalized = catch_unwind(AssertUnwindSafe(|| normalize_authority_policy_bytes(input)));
+    match normalized {
+        Ok(_) => {}
+        Err(_) => panic!(
+            "normalize_authority_policy_bytes panicked on {}",
+            prefix(input)
+        ),
+    }
+    let rules = catch_unwind(AssertUnwindSafe(|| {
+        normalize_https_authority_rules_bytes(input)
+    }));
+    match rules {
+        Ok(_) => {}
+        Err(_) => panic!(
+            "normalize_https_authority_rules_bytes panicked on {}",
+            prefix(input)
+        ),
+    }
+    let subset = catch_unwind(AssertUnwindSafe(|| {
+        is_https_authority_subset_bytes(input, input)
+    }));
+    match subset {
+        Ok(_) => {}
+        Err(_) => panic!(
+            "is_https_authority_subset_bytes panicked on {}",
+            prefix(input)
+        ),
     }
 }
 
