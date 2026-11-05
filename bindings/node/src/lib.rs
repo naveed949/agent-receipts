@@ -3,10 +3,10 @@ use std::ptr;
 
 use napi::bindgen_prelude::{Buffer, Either, Env, JsObjectValue, Object, Unknown as JsUnknown};
 use napi::sys::{self, napi_value};
-use napi::{check_status, Error as NapiError, JsValue, Status, ValueType};
+use napi::{check_status, Error as NapiError, JsTypeError, JsValue, Status, ValueType};
 use napi_derive::napi;
 
-use agent_receipts::{Error, Json, SignerError, SigningKey, Wtf16};
+use agent_receipts::{AuthorityError, CompareResult, Error, Json, SignerError, SigningKey, Wtf16};
 
 enum Fail {
     Core(Error),
@@ -133,6 +133,60 @@ pub fn controlled_signing_key_js(
     Ok(Buffer::from(checked.to_vec()))
 }
 
+#[napi(js_name = "compareAuthorityContracts")]
+pub fn compare_authority_contracts<'env>(
+    env: &'env Env,
+    previous: JsUnknown,
+    next: JsUnknown,
+) -> std::result::Result<JsUnknown<'env>, NapiError<&'static str>> {
+    let previous = build(env, previous).map_err(|err| authority_fail(env, err))?;
+    let next = build(env, next).map_err(|err| authority_fail(env, err))?;
+    let result = agent_receipts::compare_authority_contracts(&previous, &next)
+        .map_err(|err| authority_error(env, err))?;
+    let parsed = json_parse(env, compare_bytes(&result)?).map_err(fail_to_napi)?;
+    freeze_tree(env, parsed).map_err(fail_to_napi)
+}
+
+#[napi(js_name = "normalizeAuthorityPolicy")]
+pub fn normalize_authority_policy<'env>(
+    env: &'env Env,
+    value: JsUnknown,
+) -> std::result::Result<JsUnknown<'env>, NapiError<&'static str>> {
+    let tree = build(env, value).map_err(|err| authority_fail(env, err))?;
+    let normalized = agent_receipts::normalize_authority_policy(&tree)
+        .map_err(|err| authority_error(env, err))?;
+    let bytes = agent_receipts::canonical_json_value(&normalized)
+        .map_err(|_| authority_error(env, AuthorityError::InvalidInput))?;
+    let parsed = json_parse(env, bytes).map_err(fail_to_napi)?;
+    freeze_tree(env, parsed).map_err(fail_to_napi)
+}
+
+#[napi(js_name = "normalizeHttpsAuthorityRules")]
+pub fn normalize_https_authority_rules<'env>(
+    env: &'env Env,
+    value: JsUnknown,
+) -> std::result::Result<JsUnknown<'env>, NapiError<&'static str>> {
+    let tree = build(env, value).map_err(|err| authority_fail(env, err))?;
+    let normalized = agent_receipts::normalize_https_authority_rules(&tree)
+        .map_err(|err| authority_error(env, err))?;
+    let bytes = agent_receipts::canonical_json_value(&normalized)
+        .map_err(|_| authority_error(env, AuthorityError::InvalidInput))?;
+    let parsed = json_parse(env, bytes).map_err(fail_to_napi)?;
+    freeze_tree(env, parsed).map_err(fail_to_napi)
+}
+
+#[napi(js_name = "isHttpsAuthoritySubset")]
+pub fn is_https_authority_subset(
+    env: &Env,
+    inner: JsUnknown,
+    outer: JsUnknown,
+) -> std::result::Result<bool, NapiError<&'static str>> {
+    let inner = build(env, inner).map_err(|err| authority_fail(env, err))?;
+    let outer = build(env, outer).map_err(|err| authority_fail(env, err))?;
+    agent_receipts::is_https_authority_subset(&inner, &outer)
+        .map_err(|err| authority_error(env, err))
+}
+
 #[napi]
 pub const AUDIT_RECEIPT_VERSION: &str = agent_receipts::AUDIT_RECEIPT_VERSION;
 
@@ -236,6 +290,119 @@ fn json_string_literal(text: &str) -> String {
     }
     out.push('"');
     out
+}
+
+fn compare_bytes(result: &CompareResult) -> std::result::Result<Vec<u8>, NapiError<&'static str>> {
+    let widened = result
+        .widened
+        .iter()
+        .map(|path| format!("\"{}\"", path.as_str()))
+        .collect::<Vec<_>>()
+        .join(",");
+    let narrowed = result
+        .narrowed
+        .iter()
+        .map(|path| format!("\"{}\"", path.as_str()))
+        .collect::<Vec<_>>()
+        .join(",");
+    let text = format!(
+        "{{\"relationship\":\"{}\",\"widened\":[{widened}],\"narrowed\":[{narrowed}]}}",
+        result.relationship.as_str()
+    );
+    Ok(text.into_bytes())
+}
+
+fn freeze_tree<'a>(env: &'a Env, value: JsUnknown<'a>) -> Result<JsUnknown<'a>, Fail> {
+    if value.get_type().map_err(Fail::Host)? != ValueType::Object {
+        return Ok(value);
+    }
+    let object = value.coerce_to_object().map_err(Fail::Host)?;
+    if value.is_array().map_err(Fail::Host)? {
+        let length = object.get_array_length().map_err(Fail::Host)?;
+        for index in 0..length {
+            let child: JsUnknown = object.get_element(index).map_err(Fail::Host)?;
+            freeze_tree(env, child)?;
+        }
+    } else {
+        let names = own_string_names_env(env, object.raw())?;
+        for name in names {
+            let child: JsUnknown = object.get_property(name).map_err(Fail::Host)?;
+            freeze_tree(env, child)?;
+        }
+    }
+    freeze(env, value)
+}
+
+fn own_string_names_env(env: &Env, object: napi_value) -> Result<Vec<JsUnknown<'_>>, Fail> {
+    let global = env.get_global().map_err(Fail::Host)?;
+    let ctor: JsUnknown = global
+        .get_named_property_unchecked("Object")
+        .map_err(Fail::Host)?;
+    let name = CString::new("getOwnPropertyNames").map_err(|_| Fail::Core(Error::TypeError))?;
+    let mut function = ptr::null_mut();
+    check_status!(unsafe {
+        sys::napi_get_named_property(env.raw(), ctor.raw(), name.as_ptr(), &mut function)
+    })
+    .map_err(Fail::Host)?;
+    let args = [object];
+    let mut result = ptr::null_mut();
+    check_status!(unsafe {
+        sys::napi_call_function(
+            env.raw(),
+            ctor.raw(),
+            function,
+            args.len(),
+            args.as_ptr(),
+            &mut result,
+        )
+    })
+    .map_err(Fail::Host)?;
+    values_of(unsafe { JsUnknown::from_raw_unchecked(env.raw(), result) })
+}
+
+fn freeze<'a>(env: &'a Env, value: JsUnknown<'a>) -> Result<JsUnknown<'a>, Fail> {
+    let global = env.get_global().map_err(Fail::Host)?;
+    let object: JsUnknown = global
+        .get_named_property_unchecked("Object")
+        .map_err(Fail::Host)?;
+    let freeze_fn: JsUnknown = object
+        .coerce_to_object()
+        .map_err(Fail::Host)?
+        .get_named_property("freeze")
+        .map_err(Fail::Host)?;
+    let args = [value.raw()];
+    let mut result = ptr::null_mut();
+    check_status!(unsafe {
+        sys::napi_call_function(
+            env.raw(),
+            object.raw(),
+            freeze_fn.raw(),
+            args.len(),
+            args.as_ptr(),
+            &mut result,
+        )
+    })
+    .map_err(Fail::Host)?;
+    Ok(unsafe { JsUnknown::from_raw_unchecked(env.raw(), result) })
+}
+
+fn authority_error(env: &Env, err: AuthorityError) -> NapiError<&'static str> {
+    throw_js_type_error(env, err.code())
+}
+
+fn authority_fail(env: &Env, err: Fail) -> NapiError<&'static str> {
+    match err {
+        Fail::Core(err) => throw_js_type_error(env, err.code()),
+        other => fail_to_napi(other),
+    }
+}
+
+fn throw_js_type_error(env: &Env, message: &'static str) -> NapiError<&'static str> {
+    let err = NapiError::new("TypeError", message);
+    unsafe {
+        JsTypeError::from(err).throw_into(env.raw());
+    }
+    NapiError::new("PendingException", "")
 }
 
 fn signer_error(err: SignerError) -> NapiError<&'static str> {

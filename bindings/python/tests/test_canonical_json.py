@@ -11,7 +11,11 @@ from agent_receipts import (
     CanonicalizeError,
     audit_signing_key,
     canonical_json,
+    compare_authority_contracts,
     controlled_signing_key,
+    is_https_authority_subset,
+    normalize_authority_policy,
+    normalize_https_authority_rules,
     resign_audit_receipt,
     sign_controlled_integrity,
     stable_hash,
@@ -88,6 +92,7 @@ def test_reference_vectors(capsys):
     seen = []
     canonical_ok = 0
     hmac_ok = 0
+    compare_ok = 0
     for row in rows:
         name = require_str(row, "name", failures)
         kind = require_str(row, "kind", failures)
@@ -109,6 +114,14 @@ def test_reference_vectors(capsys):
             else:
                 hmac_ok += 1
             continue
+        if kind == "compareAuthorityContracts":
+            try:
+                check_compare(row, name)
+            except Exception as err:
+                failures.append(f"{name} {err}")
+            else:
+                compare_ok += 1
+            continue
         if kind not in allow:
             failures.append(f"unknown kind {kind}")
             continue
@@ -121,23 +134,26 @@ def test_reference_vectors(capsys):
     if rows and (
         canonical_ok != 8
         or hmac_ok != 8
-        or len(pending_lines) != 7
-        or canonical_ok + hmac_ok + len(pending_lines) != 23
+        or compare_ok != 7
+        or len(pending_lines) != 0
+        or canonical_ok + hmac_ok + compare_ok + len(pending_lines) != 23
     ):
         failures.append(
-            f"counts canonicalize {canonical_ok} hmac {hmac_ok} pending {len(pending_lines)}"
+            f"counts canonicalize {canonical_ok} hmac {hmac_ok} compare {compare_ok} pending {len(pending_lines)}"
         )
     for line in pending_lines:
         print(line)
     print(f"pending {len(pending_lines)}")
     print(f"canonicalize {canonical_ok} ok")
     print(f"hmac {hmac_ok} ok")
+    print(f"compare {compare_ok} ok")
     captured = capsys.readouterr().out
     for line in pending_lines:
         assert line in captured
     assert f"pending {len(pending_lines)}\n" in captured
     assert f"canonicalize {canonical_ok} ok\n" in captured
     assert f"hmac {hmac_ok} ok\n" in captured
+    assert f"compare {compare_ok} ok\n" in captured
     assert not failures, "\n".join(failures)
 
 
@@ -297,6 +313,100 @@ def require_str(row, field, failures):
         failures.append(f"missing {field}")
         return None
     return value
+
+
+def check_compare(row, name):
+    has_expected = "expected" in row
+    has_error = "expectedError" in row
+    if has_expected == has_error:
+        raise AssertionError("needs expected or expectedError")
+    if has_expected:
+        got = compare_authority_contracts(row["input"]["previous"], row["input"]["next"])
+        want = row["expected"]
+        if got["relationship"] != want["relationship"]:
+            raise AssertionError(f"{name} relationship {got['relationship']}")
+        if list(got["widened"]) != list(want["widened"]):
+            raise AssertionError(f"{name} widened {got['widened']}")
+        if list(got["narrowed"]) != list(want["narrowed"]):
+            raise AssertionError(f"{name} narrowed {got['narrowed']}")
+        return
+    cases = row["input"]["cases"]
+    expected_error = row["expectedError"]
+    if set(cases) != set(expected_error):
+        raise AssertionError(f"{name} rejection keys")
+    for label, child in cases.items():
+        spec = expected_error[label]
+        if spec.get("type") != "TypeError":
+            raise AssertionError(f"{name} {label} type")
+        try:
+            compare_authority_contracts(child["previous"], child["next"])
+        except CanonicalizeError as err:
+            raise AssertionError(f"{name} {label} CanonicalizeError {err}") from err
+        except TypeError as err:
+            if type(err) is not TypeError:
+                raise AssertionError(f"{name} {label} class {type(err)!r}") from err
+        else:
+            raise AssertionError(f"{name} {label} accepted")
+
+
+def test_https_helpers_call_rust():
+    merged = [
+        {
+            "protocol": "https",
+            "host": "API.example.com",
+            "port": 443,
+            "methods": ["HEAD", "GET"],
+            "resolution": "public-only",
+            "redirects": "none",
+            "maxResponseBytes": 1024,
+            "timeoutMs": 1000,
+        }
+    ]
+    split = [
+        {
+            "protocol": "https",
+            "host": "api.example.com",
+            "port": 443,
+            "methods": ["GET"],
+            "resolution": "public-only",
+            "redirects": "none",
+            "maxResponseBytes": 1024,
+            "timeoutMs": 1000,
+        },
+        {
+            "protocol": "https",
+            "host": "api.example.com",
+            "port": 443,
+            "methods": ["HEAD"],
+            "resolution": "public-only",
+            "redirects": "none",
+            "maxResponseBytes": 1024,
+            "timeoutMs": 1000,
+        },
+    ]
+    assert is_https_authority_subset(split, merged) is True
+    assert is_https_authority_subset(merged, split) is True
+    normalize_https_authority_rules(split)
+    normalize_authority_policy({"version": "2", "network": {"https": split}})
+
+
+def test_compare_host_rejects_are_type_error():
+    try:
+        compare_authority_contracts(datetime.now(), {})
+    except CanonicalizeError as err:
+        raise AssertionError("CanonicalizeError") from err
+    except TypeError as err:
+        assert type(err) is TypeError
+    else:
+        raise AssertionError("accepted datetime")
+    try:
+        is_https_authority_subset(set(), [])
+    except CanonicalizeError as err:
+        raise AssertionError("CanonicalizeError") from err
+    except TypeError as err:
+        assert type(err) is TypeError
+    else:
+        raise AssertionError("accepted set")
 
 
 def check_canonicalize(row, name):
