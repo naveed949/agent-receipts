@@ -112,3 +112,13 @@ The two constructors use different units. That is the reference rule, not a cryp
 - Controlled-integrity signer: always measured in UTF-8 bytes of the key material HMAC will use. Below 16 is `ShortControlledKey`. The same eight `é` characters pass. A 15-byte array fails.
 
 HMAC-SHA256 consumes the UTF-8 bytes. UTF-16 length is a host-string accident. Keep the split until one unit is chosen. If the constructors are unified later, 16 UTF-8 bytes is the unit that matches the MAC.
+
+## 2026-11-05 SemVer pins and one abi3 wheel
+
+A stored `stableHash` or HMAC tag is a promise about bytes. Changing those bytes, or the 64 ASCII hex characters HMAC covers, is a major change even when the function names stay the same. `docs/VERSIONING.md` is the reference. `0.y.z` uses the same meanings as `1.y.z` and increments the minor for a break until `1.0.0`.
+
+The three packages share `[workspace.package].version`. A host-only export still bumps that number. Bindings do not keep a private compatibility series.
+
+`cargo-semver-checks` wants a published crates.io baseline. This crate is `publish = false` and `0.0.0`, so that tool has nothing to diff. `cargo public-api` wants rustdoc JSON. That dump is unstable on the pinned 1.83 toolchain. The pin is `crates/core/tests/public_api.rs`: each public function is assigned to a function pointer with the exact type, and each public enum is matched exhaustively. A renamed argument or a new variant fails at `rustc`. Python uses `inspect.signature` and the exported name set. Node uses `Object.keys` and `error.code`. Those tests need no extra binary. Adding a public item does not fail the Rust compile test until someone adds a pointer. That miss is a missed minor, not a missed major.
+
+One `cp39-abi3` wheel is the product. Per-CPython wheels would rebuild the same limited-API module for 3.9, 3.10, 3.11, 3.12, and 3.13. The binding copies host values into an owned tree. The limited API can do that copy. The cost is the limited API, not a missing opcode. CI builds that wheel on `ubuntu-latest` and `ubuntu-24.04-arm`, uploads `agent-receipts-cp39-abi3-${{ runner.arch }}`, then installs it into a clean venv on CPython 3.9 and again on 3.13. Those two minors are the declared floor and a current CPython. The same pytest suite, including the shared vectors, runs in each venv. There is no PyPI upload.
