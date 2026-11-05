@@ -42,7 +42,7 @@ It checks, from the repository root:
 - `python3` is 3.9 or later and `python3 -m pip` works
 - `node` major version is 22 and `npm` is on `PATH`
 
-A failed check is `FAIL`, not `UNSUPPORTED`. `UNSUPPORTED` is only for a surface that exists in the product and cannot run on this OS even with the toolchain present. No such surface exists on the CI targets (`ubuntu-latest`, `ubuntu-24.04-arm`).
+A failed check is `FAIL`, not `UNSUPPORTED`. `UNSUPPORTED` is only for a surface that exists in the product and cannot run on this OS even with the toolchain present. No such surface exists on the CI targets (`ubuntu-24.04`, `ubuntu-24.04-arm`).
 
 ## Drive
 
