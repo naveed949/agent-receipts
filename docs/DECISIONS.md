@@ -73,3 +73,16 @@ Audit signer length is measured in host units: UTF-16 code units for a string, b
 Bindings copy the key into owned bytes, then call Rust. Python and Node do not implement HMAC. After `resign_audit_receipt` returns a `Json` tree, each binding emits canonical JSON and lets the host parser rebuild a value, because the inspectors on `Json` are crate-private.
 
 `compareAuthorityContracts` is still pending.
+
+## 2026-11-05 Key material lifetime
+
+The core does not depend on `zeroize`. `audit_signing_key` and `controlled_signing_key` return `&[u8]` borrowed from the caller's buffer. Bindings copy the host key into an owned `Vec<u8>`, check the length, and hand a Python `bytes` or Node `Buffer` back to the caller. Nothing overwrites those bytes on drop. Dropping a `Vec<u8>` is not a wipe. Host-side copies stay until the language runtime reclaims them. Adding `zeroize` on the Rust `Vec` would still leave the Python and Node copies intact, so this revision documents the limit rather than adding a crate that cannot cover the host.
+
+## 2026-11-05 Signer length split
+
+The two constructors use different units. That is the reference rule, not a cryptographic claim.
+
+- Audit signer: a string is measured in UTF-16 code units; a byte array is measured in bytes. Either value below 16 is `ShortAuditKey`. Eight `é` characters are 8 UTF-16 units and 16 UTF-8 bytes, so the audit constructor rejects them. Verify has no floor: a five-character key that signed a receipt still verifies that receipt.
+- Controlled-integrity signer: always measured in UTF-8 bytes of the key material HMAC will use. Below 16 is `ShortControlledKey`. The same eight `é` characters pass. A 15-byte array fails.
+
+HMAC-SHA256 consumes the UTF-8 bytes. UTF-16 length is a host-string accident. Keep the split until one unit is chosen. If the constructors are unified later, 16 UTF-8 bytes is the unit that matches the MAC.

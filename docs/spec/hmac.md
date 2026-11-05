@@ -6,6 +6,8 @@ The key is supplied by the caller. A receipt stores only a key identifier. A str
 
 A signer constructor enforces a minimum length. Verify does not. An audit signer measures a string in UTF-16 code units and a byte array in bytes, so eight `é` characters fail. A controlled-integrity signer measures UTF-8 bytes, so the same string passes. That split is inherited from the reference and is recorded in [Decisions](../DECISIONS.md).
 
+`audit_signing_key` and `controlled_signing_key` return a borrowed view of the caller's key bytes. They do not copy the key into a long-lived buffer, and they do not wipe it. Dropping a `Vec<u8>` does not overwrite the bytes. This crate does not depend on `zeroize`. Host-side copies (Python `bytes`, Node `Buffer`) are outside this crate's control.
+
 ## Audit receipts
 
 `verify_audit_receipt` returns true only when every step below succeeds. Any other input is false.
@@ -21,6 +23,8 @@ A signer constructor enforces a minimum length. Verify does not. An audit signer
 9. Version linkage holds. A correctly tagged receipt can still fail here.
 
 `resign_audit_receipt` writes a new `integrity.signature` under the current preimage and the same key. It does not change any other field. A receipt that already uses this preimage restamps to the same tag. A receipt issued under the earlier preimage, which hashed the receipt with the whole `integrity` object removed, verifies as false until it is restamped.
+
+`resign_audit_receipt` is a signing oracle. Anyone who holds the key can stamp any well-formed receipt. The function writes a tag over the current preimage. It does not recheck artifact hashes or version linkage. Resign never makes a hash-broken or linkage-broken receipt verify. Those checks still run in `verify_audit_receipt` after the tag matches.
 
 Rust names: `verify_audit_receipt`, `resign_audit_receipt`. Python: `verify_audit_receipt`, `resign_audit_receipt`. Node: `verifyAuditReceipt`, `resignAuditReceipt`.
 
