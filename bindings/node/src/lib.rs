@@ -398,7 +398,7 @@ fn authority_fail(env: &Env, err: Fail) -> NapiError<&'static str> {
 }
 
 fn throw_js_type_error(env: &Env, message: &'static str) -> NapiError<&'static str> {
-    let err = NapiError::new("TypeError", message);
+    let err = NapiError::new(message, message);
     unsafe {
         JsTypeError::from(err).throw_into(env.raw());
     }

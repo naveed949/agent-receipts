@@ -60,7 +60,7 @@ Rule set R is a subset of C when, for every rule r in R and every method m of r,
 
 Host names are compared after lowercasing. Ports are compared exactly. There is no implicit port 443.
 
-On invalid input the host languages raise `TypeError`. The message text is not a contract.
+On invalid input the host languages raise `TypeError`. The message text is not a contract. Python and Node both set `TypeError.code` to the `AuthorityError` code (`cross_version`, `invalid_input`, and the rest). JSON text with a duplicate key is `invalid_input` on the bytes entry. Diagnostic dumps must reject that text the same way and must not last-win a key.
 
 ## Why a subset check
 

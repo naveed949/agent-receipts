@@ -94,7 +94,9 @@ Fail-closed choices the reference file does not pin:
 - A non-object policy is `NotAnObject`.
 - Bound fields must be positive safe integers.
 
-Bindings copy host values into `Json`, call Rust, and map `AuthorityError` to `TypeError`. Host conversion failures on the authority APIs are also `TypeError`, not the canonicalize exception. Node throws a real `TypeError` (`napi_create_type_error`), not a plain `Error` with `code` set to the string `"TypeError"`. They do not reimplement subset or validation. Node freezes the compare result and the normalize results. `network.https: false` is an invalid shape, not an empty grant.
+Bindings copy host values into `Json`, call Rust, and map `AuthorityError` to `TypeError`. Host conversion failures on the authority APIs are also `TypeError`, not the canonicalize exception. Node throws a real `TypeError` (`napi_create_type_error`). Both hosts set `TypeError.code` to the `AuthorityError` code, so `err.code` is `cross_version` rather than the string `"TypeError"`. They do not reimplement subset or validation. Node freezes the compare result and the normalize results. `network.https: false` is an invalid shape, not an empty grant.
+
+The verify dump helpers are diagnostic, but they sit on the same JSON text as `compare_authority_contracts_bytes`. A last-win parse of a duplicate `filesystem.read` can report `unchanged` or `narrowing` while the bytes API returns `invalid_input`. The dumps reject duplicate keys in the input text and print `err invalid_input`. The Rust dump extracts the `previous` and `next` value spans and passes those raw bytes to `compare_authority_contracts_bytes`. It does not round-trip through `serde_json`. Node has no public bytes entry. The dump parser rejects duplicate keys in process and still calls `compareAuthorityContracts` on host objects.
 
 Python and Node round-trip a normalized policy through canonical JSON because `Json` inspectors stay crate-private. The compare result is built from the typed `CompareResult`, not from a JSON round-trip of the policies.
 

@@ -345,6 +345,8 @@ def check_compare(row, name):
         except TypeError as err:
             if type(err) is not TypeError:
                 raise AssertionError(f"{name} {label} class {type(err)!r}") from err
+            if label == "crossVersion" and getattr(err, "code", None) != "cross_version":
+                raise AssertionError(f"{name} {label} code {getattr(err, 'code', None)!r}") from err
         else:
             raise AssertionError(f"{name} {label} accepted")
 

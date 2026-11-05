@@ -387,7 +387,15 @@ function checkCompare(row, name) {
     assert.equal(expectedError[label].type, "TypeError", `${name} ${label}`);
     assert.throws(
       () => compareAuthorityContracts(cases[label].previous, cases[label].next),
-      (err) => err instanceof TypeError,
+      (err) => {
+        if (!(err instanceof TypeError)) {
+          return false;
+        }
+        if (label === "crossVersion") {
+          return err.code === "cross_version";
+        }
+        return true;
+      },
       `${name} ${label}`,
     );
   }
