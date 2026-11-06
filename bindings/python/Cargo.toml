@@ -14,5 +14,7 @@ doctest = false
 
 [dependencies]
 # The cdylib crate name is agent_receipts, so the core crate is renamed here.
-receipts = { package = "agent-receipts", path = "../../crates/core" }
+receipts = { package = "agent-receipts", path = "../../crates/core", features = ["stream"] }
 pyo3 = { version = "0.29.3", features = ["abi3-py39", "extension-module"] }
+pyo3-async-runtimes = { version = "=0.29.0", features = ["tokio-runtime"] }
+tokio = { workspace = true, features = ["fs", "rt-multi-thread"] }

@@ -1,8 +1,27 @@
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
 use pyo3::exceptions::{PyException, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{
     PyBool, PyByteArray, PyBytes, PyDict, PyFloat, PyInt, PyList, PyModule, PyString,
 };
+
+const _: () = assert!(receipts::DEFAULT_STREAM_CAPACITY == 32);
+const _: () = assert!(receipts::DEFAULT_MAX_LINE_LEN == 1_048_576);
+
+struct PyLimit(usize);
+
+impl<'a, 'py> FromPyObject<'a, 'py> for PyLimit {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> Result<Self, PyErr> {
+        if obj.cast_exact::<PyBool>().is_ok() {
+            return Err(PyTypeError::new_err("limit must be an int"));
+        }
+        Ok(Self(obj.extract()?))
+    }
+}
 
 use receipts::{
     AuthorityError, AuthorityPath, CompareResult, Error, Json, SignerError, SigningKey, Wtf16,
@@ -421,6 +440,90 @@ fn signer_error(err: SignerError) -> PyErr {
     }
 }
 
+#[pyfunction]
+#[pyo3(
+    signature = (
+        path,
+        key,
+        *,
+        capacity = PyLimit(receipts::DEFAULT_STREAM_CAPACITY),
+        max_line_len = PyLimit(receipts::DEFAULT_MAX_LINE_LEN)
+    ),
+    text_signature = "(path, key, *, capacity=32, max_line_len=1048576)"
+)]
+fn verify_stream<'py>(
+    py: Python<'py>,
+    path: &Bound<'py, PyAny>,
+    key: &Bound<'py, PyAny>,
+    capacity: PyLimit,
+    max_line_len: PyLimit,
+) -> PyResult<Bound<'py, PyAny>> {
+    let key = copied_stream_key(key)?;
+    let path = copied_path(path)?;
+    let limits = receipts::StreamLimits::default()
+        .with_capacity(capacity.0)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?
+        .with_max_line_len(max_line_len.0)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    ensure_stream_runtime();
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let file = tokio::fs::File::open(&path).await.map_err(PyErr::from)?;
+        let counts = receipts::verify_audit_receipt_lines(file, &key, limits)
+            .await
+            .map_err(PyErr::from)?;
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("ok", counts.ok)?;
+            dict.set_item("invalid", counts.invalid)?;
+            dict.set_item("malformed", counts.malformed)?;
+            Ok(dict.unbind())
+        })
+    })
+}
+
+fn copied_stream_key(value: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    if let Ok(bytes) = value.cast_exact::<PyBytes>() {
+        return Ok(bytes.as_bytes().to_vec());
+    }
+    if let Ok(array) = value.cast_exact::<PyByteArray>() {
+        return Ok(array.to_vec());
+    }
+    if value.cast_exact::<PyString>().is_ok() {
+        let utf8 = value.call_method("encode", ("utf-8",), None)?;
+        let raw = utf8.cast_exact::<PyBytes>()?;
+        return Ok(raw.as_bytes().to_vec());
+    }
+    Err(PyTypeError::new_err("key must be bytes, bytearray, or str"))
+}
+
+fn copied_path(value: &Bound<'_, PyAny>) -> PyResult<PathBuf> {
+    if value.cast_exact::<PyBytes>().is_ok() || value.cast_exact::<PyByteArray>().is_ok() {
+        return Err(PyTypeError::new_err("path must be a str or os.PathLike"));
+    }
+    if value.cast_exact::<PyString>().is_ok() {
+        let text: String = value.extract()?;
+        return Ok(PathBuf::from(text));
+    }
+    let converted = PyModule::import(value.py(), "os")?
+        .getattr("fspath")?
+        .call1((value,))?;
+    if converted.cast_exact::<PyString>().is_err() {
+        return Err(PyTypeError::new_err("path must be a str or os.PathLike"));
+    }
+    let text: String = converted.extract()?;
+    Ok(PathBuf::from(text))
+}
+
+fn ensure_stream_runtime() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    STARTED.get_or_init(|| {
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder.enable_all();
+        pyo3_async_runtimes::tokio::init(builder);
+        let _runtime = pyo3_async_runtimes::tokio::get_runtime();
+    });
+}
+
 fn canonicalize_error(py: Python<'_>, err: Error) -> PyErr {
     let raised = CanonicalizeError::new_err(err.code());
     match raised.value(py).setattr("code", err.code()) {
@@ -443,6 +546,7 @@ fn agent_receipts(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(normalize_authority_policy, module)?)?;
     module.add_function(wrap_pyfunction!(normalize_https_authority_rules, module)?)?;
     module.add_function(wrap_pyfunction!(is_https_authority_subset, module)?)?;
+    module.add_function(wrap_pyfunction!(verify_stream, module)?)?;
     module.add("AUDIT_RECEIPT_VERSION", AUDIT_RECEIPT_VERSION)?;
     module.add("AUDIT_RECEIPT_V2_VERSION", AUDIT_RECEIPT_V2_VERSION)?;
     module.add("CONTROLLED_INTEGRITY_VERSION", CONTROLLED_INTEGRITY_VERSION)?;
