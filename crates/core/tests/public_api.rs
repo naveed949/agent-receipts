@@ -207,6 +207,18 @@ fn stream_public_items_are_pinned() {
     let _: fn() -> AuditReceiptCounts = AuditReceiptCounts::default;
     assert_eq!(counts.lines(), 6);
     assert_eq!(AuditReceiptCounts::default().lines(), 0);
+
+    fn assert_stream_future<F>(future: F)
+    where
+        F: std::future::Future<Output = Result<AuditReceiptCounts, std::io::Error>>,
+    {
+        let _ = std::mem::size_of_val(&future);
+    }
+    assert_stream_future(agent_receipts::verify_audit_receipt_lines(
+        std::io::Cursor::new(Vec::<u8>::new()),
+        b"",
+        StreamLimits::default(),
+    ));
 }
 
 #[test]

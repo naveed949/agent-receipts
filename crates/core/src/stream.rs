@@ -1,5 +1,9 @@
 use std::fmt;
+use std::io;
 use std::num::NonZeroUsize;
+
+use tokio::io::AsyncReadExt;
+use tokio::sync::mpsc;
 
 pub const DEFAULT_STREAM_CAPACITY: usize = 32;
 pub const DEFAULT_MAX_LINE_LEN: usize = 1_048_576;
@@ -107,16 +111,25 @@ impl AuditReceiptCounts {
     pub const fn lines(self) -> u128 {
         self.ok as u128 + self.invalid as u128 + self.malformed as u128
     }
+
+    fn add(&mut self, class: LineClass) {
+        let field = match class {
+            LineClass::Ok => &mut self.ok,
+            LineClass::Invalid => &mut self.invalid,
+            LineClass::Malformed => &mut self.malformed,
+        };
+        *field = field
+            .checked_add(1)
+            .expect("audit line counter overflowed u64");
+    }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 enum LineClass {
     Ok,
     Invalid,
     Malformed,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn classify_line(body: &[u8], key: &[u8]) -> LineClass {
     if crate::verify_audit_receipt_bytes(body, key) {
         LineClass::Ok
@@ -129,15 +142,135 @@ fn classify_line(body: &[u8], key: &[u8]) -> LineClass {
 
 const READ_CHUNK: usize = 8192;
 
+enum FrameItem {
+    Line(Vec<u8>),
+    Malformed,
+}
+
+enum Scan {
+    Body(Vec<u8>),
+    Discard,
+}
+
+fn push_byte(scan: &mut Scan, byte: u8, max_line_len: usize) -> Option<FrameItem> {
+    let overflow = match scan {
+        Scan::Discard => {
+            if byte != b'\n' {
+                return None;
+            }
+            *scan = Scan::Body(Vec::new());
+            return Some(FrameItem::Malformed);
+        }
+        Scan::Body(body) if byte == b'\n' => {
+            let line = std::mem::take(body);
+            return Some(FrameItem::Line(line));
+        }
+        Scan::Body(body) => body.len() == max_line_len,
+    };
+    if overflow {
+        *scan = Scan::Discard;
+    } else if let Scan::Body(body) = scan {
+        body.push(byte);
+    }
+    None
+}
+
+fn finish_scan(scan: Scan) -> Option<FrameItem> {
+    match scan {
+        Scan::Discard => Some(FrameItem::Malformed),
+        Scan::Body(body) if body.is_empty() => None,
+        Scan::Body(_) => Some(FrameItem::Malformed),
+    }
+}
+
+async fn emit(tx: &mpsc::Sender<FrameItem>, item: FrameItem) -> io::Result<()> {
+    if tx.send(item).await.is_err() {
+        return Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "verifier dropped",
+        ));
+    }
+    yield_between_frames().await;
+    Ok(())
+}
+
+async fn yield_between_frames() {
+    // A page-cache read returns Ready, so the budget is where cancel lands.
+    tokio::task::coop::consume_budget().await;
+}
+
+async fn read_frames<R>(
+    mut reader: R,
+    tx: mpsc::Sender<FrameItem>,
+    max_line_len: usize,
+) -> io::Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut scratch = [0u8; READ_CHUNK];
+    let mut scan = Scan::Body(Vec::new());
+    loop {
+        let n = reader.read(&mut scratch).await?;
+        if n == 0 {
+            if let Some(item) = finish_scan(scan) {
+                emit(&tx, item).await?;
+            }
+            return Ok(());
+        }
+        let mut index = 0;
+        while index < n {
+            let byte = scratch[index];
+            index += 1;
+            if let Some(item) = push_byte(&mut scan, byte, max_line_len) {
+                emit(&tx, item).await?;
+            }
+        }
+    }
+}
+
+async fn verify_frames(mut rx: mpsc::Receiver<FrameItem>, key: &[u8]) -> AuditReceiptCounts {
+    let mut counts = AuditReceiptCounts::default();
+    while let Some(item) = rx.recv().await {
+        let class = match item {
+            FrameItem::Line(body) => classify_line(&body, key),
+            FrameItem::Malformed => LineClass::Malformed,
+        };
+        counts.add(class);
+        yield_between_frames().await;
+    }
+    counts
+}
+
+#[must_use = "dropping the future cancels verification and yields no counts"]
+pub async fn verify_audit_receipt_lines<R>(
+    reader: R,
+    key: &[u8],
+    limits: StreamLimits,
+) -> Result<AuditReceiptCounts, io::Error>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let (tx, rx) = mpsc::channel(limits.capacity());
+    let read = read_frames(reader, tx, limits.max_line_len());
+    let verify = async move { Ok(verify_frames(rx, key).await) };
+    let ((), counts) = tokio::try_join!(read, verify)?;
+    Ok(counts)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, OnceLock};
+    use std::task::{Context, Poll};
 
     use super::{
-        classify_line, AuditReceiptCounts, LimitsError, LineClass, StreamLimits,
-        DEFAULT_MAX_LINE_LEN, DEFAULT_STREAM_CAPACITY, READ_CHUNK,
+        classify_line, read_frames, verify_audit_receipt_lines, AuditReceiptCounts, LimitsError,
+        LineClass, StreamLimits, DEFAULT_MAX_LINE_LEN, DEFAULT_STREAM_CAPACITY, READ_CHUNK,
     };
     use crate::{parse::parse, Json, Wtf16};
+    use tokio::io::{AsyncRead, ReadBuf};
 
     #[test]
     fn limits_reject_zero_and_name_the_ceiling() {
@@ -220,6 +353,232 @@ mod tests {
             classify_line(&nested_arrays(128), &key),
             LineClass::Invalid
         ));
+    }
+
+    #[tokio::test]
+    async fn identity_compact_v1_receipt_matches_bytes_verify() {
+        let (body, key) = v1_body_and_key();
+        assert!(crate::verify_audit_receipt_bytes(&body, &key));
+        let mut line = body.clone();
+        line.push(b'\n');
+        let counts = count_bytes(&line, &key, StreamLimits::default()).await;
+        assert_eq!(counts.ok, 1);
+        assert_eq!(counts.invalid, 0);
+        assert_eq!(counts.malformed, 0);
+        assert_eq!(counts.lines(), 1);
+
+        let mut crlf = body;
+        crlf.extend_from_slice(b"\r\n");
+        let kept = count_bytes(&crlf, &key, StreamLimits::default()).await;
+        assert_eq!(kept.ok, 1);
+        assert_eq!(kept.malformed, 0);
+    }
+
+    #[tokio::test]
+    async fn invalid_versus_malformed_lines() {
+        let (body, key) = v1_body_and_key();
+        let mut bad = body.clone();
+        flip_signature_hex(&mut bad);
+        let mut file = Vec::new();
+        push_line(&mut file, &bad);
+        file.push(b'\n');
+        file.extend_from_slice(b" \t\n");
+        file.extend_from_slice(b"\r\n");
+        file.extend_from_slice(b"{\"a\":1,\"a\":2}\n");
+        file.extend_from_slice(b"{}{}\n");
+        file.extend_from_slice(b"\xff\n");
+        push_line(&mut file, &nested_arrays(129));
+        file.extend_from_slice(&body);
+        let limits = StreamLimits::default().with_capacity(1).expect("capacity");
+        let counts = count_bytes(&file, &key, limits).await;
+        assert_eq!(counts.ok, 0);
+        assert_eq!(counts.invalid, 1);
+        assert_eq!(counts.malformed, 8);
+        assert_eq!(counts.lines(), 9);
+        assert!(crate::verify_audit_receipt_bytes(&body, &key));
+    }
+
+    #[tokio::test]
+    async fn oversized_line_counts_once_and_stays_unverified() {
+        let (body, key) = v1_body_and_key();
+        assert!(crate::verify_audit_receipt_bytes(&body, &key));
+        let mut file = body.clone();
+        file.push(b'\n');
+        file.extend_from_slice(b"{}\n");
+        let limits = StreamLimits::default()
+            .with_max_line_len(8)
+            .expect("max line");
+        let counts = count_bytes(&file, &key, limits).await;
+        assert_eq!(counts.ok, 0);
+        assert_eq!(counts.invalid, 1);
+        assert_eq!(counts.malformed, 1);
+
+        let exact = count_bytes(b"{}\n", &key, limits).await;
+        assert_eq!(exact.invalid, 1);
+        assert_eq!(exact.malformed, 0);
+        let over = count_bytes(b"{}\n", &key, limits.with_max_line_len(1).expect("one")).await;
+        assert_eq!(over.invalid, 0);
+        assert_eq!(over.malformed, 1);
+    }
+
+    #[tokio::test]
+    async fn truncated_tail_is_malformed_and_unverified() {
+        let (body, key) = v1_body_and_key();
+        assert!(crate::verify_audit_receipt_bytes(&body, &key));
+        let counts = count_bytes(&body, &key, StreamLimits::default()).await;
+        assert_eq!(counts.ok, 0);
+        assert_eq!(counts.invalid, 0);
+        assert_eq!(counts.malformed, 1);
+        let empty = count_bytes(b"", &key, StreamLimits::default()).await;
+        assert_eq!(empty, AuditReceiptCounts::default());
+        let newline = count_bytes(b"\n", &key, StreamLimits::default()).await;
+        assert_eq!(newline.malformed, 1);
+        assert_eq!(newline.lines(), 1);
+    }
+
+    #[tokio::test]
+    async fn io_error_after_a_good_line_returns_err_without_counts() {
+        let (body, key) = v1_body_and_key();
+        let mut line = body;
+        line.push(b'\n');
+        let reader = FailAfter {
+            pending: line,
+            failed: false,
+        };
+        let err = verify_audit_receipt_lines(reader, &key, StreamLimits::default())
+            .await
+            .expect_err("io");
+        assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    }
+
+    #[tokio::test]
+    async fn backpressure_stops_poll_read() {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let capacity = 4;
+        let reader = LineReader {
+            polls: Arc::clone(&polls),
+            left: 100,
+        };
+        let (tx, _rx) = tokio::sync::mpsc::channel(capacity);
+        let read = tokio::task::coop::unconstrained(read_frames(reader, tx, 64));
+        tokio::pin!(read);
+        poll_until_pending(&mut read).await;
+        assert_eq!(polls.load(Ordering::SeqCst), capacity + 1);
+        poll_until_pending(&mut read).await;
+        assert_eq!(polls.load(Ordering::SeqCst), capacity + 1);
+    }
+
+    #[tokio::test]
+    async fn cancel_drops_reader_without_counts() {
+        let before = tokio::runtime::Handle::current()
+            .metrics()
+            .num_alive_tasks();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let reader = PendingReader {
+            dropped: Arc::clone(&dropped),
+        };
+        {
+            let fut = verify_audit_receipt_lines(reader, b"k", StreamLimits::default());
+            tokio::pin!(fut);
+            poll_until_pending(&mut fut).await;
+            assert!(!dropped.load(Ordering::SeqCst));
+        }
+        assert!(dropped.load(Ordering::SeqCst));
+        let after = tokio::runtime::Handle::current()
+            .metrics()
+            .num_alive_tasks();
+        assert_eq!(before, after);
+    }
+
+    async fn count_bytes(bytes: &[u8], key: &[u8], limits: StreamLimits) -> AuditReceiptCounts {
+        verify_audit_receipt_lines(std::io::Cursor::new(bytes.to_vec()), key, limits)
+            .await
+            .expect("read")
+    }
+
+    fn push_line(file: &mut Vec<u8>, body: &[u8]) {
+        file.extend_from_slice(body);
+        file.push(b'\n');
+    }
+
+    async fn poll_until_pending<F: Future + Unpin>(fut: &mut F) {
+        std::future::poll_fn(|cx| match Pin::new(&mut *fut).poll(cx) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(_) => panic!("future finished"),
+        })
+        .await;
+    }
+
+    struct LineReader {
+        polls: Arc<AtomicUsize>,
+        left: usize,
+    }
+
+    impl AsyncRead for LineReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let this = self.get_mut();
+            this.polls.fetch_add(1, Ordering::SeqCst);
+            if this.left == 0 {
+                return Poll::Ready(Ok(()));
+            }
+            this.left -= 1;
+            buf.put_slice(b"x\n");
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    struct PendingReader {
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for PendingReader {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl AsyncRead for PendingReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    struct FailAfter {
+        pending: Vec<u8>,
+        failed: bool,
+    }
+
+    impl AsyncRead for FailAfter {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let this = self.get_mut();
+            if !this.pending.is_empty() {
+                let n = buf.remaining().min(this.pending.len());
+                let rest = this.pending.split_off(n);
+                buf.put_slice(&this.pending);
+                this.pending = rest;
+                Poll::Ready(Ok(()))
+            } else if !this.failed {
+                this.failed = true;
+                Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "read failed",
+                )))
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        }
     }
 
     fn nested_arrays(depth: usize) -> Vec<u8> {

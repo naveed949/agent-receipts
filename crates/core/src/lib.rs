@@ -26,7 +26,8 @@ pub use hmac::{
 mod stream;
 #[cfg(feature = "stream")]
 pub use stream::{
-    AuditReceiptCounts, LimitsError, StreamLimits, DEFAULT_MAX_LINE_LEN, DEFAULT_STREAM_CAPACITY,
+    verify_audit_receipt_lines, AuditReceiptCounts, LimitsError, StreamLimits,
+    DEFAULT_MAX_LINE_LEN, DEFAULT_STREAM_CAPACITY,
 };
 
 #[cfg(test)]
