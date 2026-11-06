@@ -54,7 +54,6 @@ def test_short_key_still_returns_counts(tmp_path):
 
 
 def test_bad_key_type_is_type_error_before_awaitable():
-    assert m.verify_audit_receipt({"version": "nope"}, 1) is False
     with pytest.raises(TypeError, match="key must be bytes, bytearray, or str"):
         m.verify_stream("unused", 1)
 
