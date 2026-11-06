@@ -635,4 +635,112 @@ mod tests {
             + marker.len();
         bytes[start] = if bytes[start] == b'a' { b'b' } else { b'a' };
     }
+
+    struct ChunkedFile {
+        file: std::io::BufReader<std::fs::File>,
+    }
+
+    impl AsyncRead for ChunkedFile {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let this = self.get_mut();
+            let n = std::io::Read::read(&mut this.file, buf.initialize_unfilled())?;
+            buf.advance(n);
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn proc_kib(label: &str) -> u64 {
+        let text = std::fs::read_to_string("/proc/self/status").expect("status");
+        let prefix = format!("{label}:");
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix(&prefix) {
+                return rest
+                    .split_whitespace()
+                    .next()
+                    .expect("kib")
+                    .parse()
+                    .expect("kib");
+            }
+        }
+        panic!("missing {label}");
+    }
+
+    fn cpu_ticks() -> (u64, u64) {
+        let stat = std::fs::read_to_string("/proc/self/stat").expect("stat");
+        let rest = stat.rsplit_once(')').expect("comm").1;
+        let fields: Vec<&str> = rest.split_whitespace().collect();
+        (
+            fields[11].parse().expect("utime"),
+            fields[12].parse().expect("stime"),
+        )
+    }
+
+    #[ignore = "writes and verifies 1000000 lines"]
+    #[tokio::test]
+    async fn million_line_receipts_per_sec() {
+        let (body, key) = v1_body_and_key();
+        assert!(body.len() < 64 * 1024);
+        let path = std::env::temp_dir().join(format!(
+            "agent-receipts-million-{}.jsonl",
+            std::process::id()
+        ));
+        let _remove = RemoveFile(path.clone());
+        {
+            let mut out = std::io::BufWriter::new(std::fs::File::create(&path).expect("create"));
+            for _ in 0..1_000_000 {
+                std::io::Write::write_all(&mut out, &body).expect("write");
+                std::io::Write::write_all(&mut out, b"\n").expect("newline");
+            }
+            std::io::Write::flush(&mut out).expect("flush");
+        }
+        let (utime_before, stime_before) = cpu_ticks();
+        let started = std::time::Instant::now();
+        let limits = StreamLimits::default();
+        let file = ChunkedFile {
+            file: std::io::BufReader::new(std::fs::File::open(&path).expect("open")),
+        };
+        let counts = verify_audit_receipt_lines(file, &key, limits)
+            .await
+            .expect("verify");
+        let elapsed = started.elapsed();
+        let (utime_after, stime_after) = cpu_ticks();
+        std::hint::black_box(counts.ok);
+        std::hint::black_box(counts.invalid);
+        std::hint::black_box(counts.malformed);
+        assert_eq!(counts.ok, 1_000_000);
+        assert_eq!(counts.invalid, 0);
+        assert_eq!(counts.malformed, 0);
+        assert_eq!(counts.lines(), 1_000_000);
+        let secs = elapsed.as_secs_f64();
+        println!(
+            "method limiter=(capacity+2)*max_line_len+8192={} plus one Json tree; results consumed; line count asserted",
+            limits.max_retained_line_bytes()
+        );
+        println!(
+            "ok={} invalid={} malformed={} lines={}",
+            counts.ok,
+            counts.invalid,
+            counts.malformed,
+            counts.lines()
+        );
+        println!("elapsed_sec={secs:.6}");
+        println!("receipts_per_sec={:.1}", 1_000_000.0 / secs);
+        println!("VmHWM_kB={}", proc_kib("VmHWM"));
+        println!("VmRSS_kB={}", proc_kib("VmRSS"));
+        println!("utime_ticks={}", utime_after - utime_before);
+        println!("stime_ticks={}", stime_after - stime_before);
+        println!("line_bytes={}", body.len() + 1);
+    }
+
+    struct RemoveFile(std::path::PathBuf);
+
+    impl Drop for RemoveFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
 }

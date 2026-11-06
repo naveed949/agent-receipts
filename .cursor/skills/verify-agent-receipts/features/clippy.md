@@ -26,4 +26,5 @@ Preconditions:
 ## Gotchas
 
 - `cargo clippy` without `-D warnings` can exit 0 with warnings. That is not this surface.
+- Workspace clippy does not pass `--all-features`. CI also runs `cargo clippy -p agent-receipts --all-targets --features stream -- -D warnings`.
 - `--all-targets` is required so the core tests are linted. It is not what compiles `bindings/node/build.rs`. That file is a member build script, so Clippy compiles it when it checks the node library.

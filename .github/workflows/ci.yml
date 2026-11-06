@@ -36,7 +36,9 @@ jobs:
           node-version: "22"
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy -p agent-receipts --all-targets --features stream -- -D warnings
       - run: cargo test --workspace
+      - run: cargo test -p agent-receipts --features stream
       - run: python3 -m pip install maturin==1.16.0
       - run: maturin build --release --manifest-path bindings/python/Cargo.toml --interpreter python3
       - name: Upload the abi3 wheel

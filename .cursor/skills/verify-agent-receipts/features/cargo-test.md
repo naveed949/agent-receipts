@@ -23,7 +23,7 @@ Preconditions:
 - `scripts/verify.sh doctor` prints `RESULT=PASS`.
 - `vectors/reference/vectors.json` and `vectors/text` exist.
 
-- **Workspace tests.** Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh`. The `cargo-test` row is `PASS`.
+- **Workspace tests.** Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh`. The `cargo-test` row is `PASS`. The same log also contains `cargo test -p agent-receipts --features stream`, including `test stream_public_items_are_pinned ... ok`.
 - **Text runner.** Open `cargo-test.log`. It contains `running 9 vector cases`, then `test result: ok`.
 - **Reference runner.** The same log contains `test reference::reference_vectors ... ok` and `test reference::gondolin_https_is_v1_only ... ok`. Cargo hides that test's stdout when it passes. `hmac 8 ok` and `compare 7 ok` are asserted inside the test and printed by the Node and Python runs.
 - **Missing cargo.** If cargo is missing, the row is `FAIL`. It is not `PASS`.

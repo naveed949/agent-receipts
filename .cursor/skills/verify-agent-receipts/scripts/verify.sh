@@ -185,6 +185,32 @@ record_reserved() {
   record "$id" NOT_IMPLEMENTED "no API on this checkout"
 }
 
+record_stream() {
+  local cargo_log=$EVIDENCE/cargo-test.log
+  local py_log=$EVIDENCE/python-abi3.log
+  if ! grep -RInE --include='*.rs' 'async[[:space:]]+fn' "$REPO_ROOT/crates/core/src" >/dev/null 2>&1; then
+    record async-streaming-verifier NOT_IMPLEMENTED "no async fn in crates/core/src"
+    return
+  fi
+  if [[ ! -f "$cargo_log" ]] || ! grep -E -q 'test .*backpressure.* \.\.\. ok$' "$cargo_log"; then
+    record async-streaming-verifier FAIL "cargo backpressure test not ok; see $cargo_log"
+    return
+  fi
+  if ! grep -E -q 'test .*cancel.* \.\.\. ok$' "$cargo_log"; then
+    record async-streaming-verifier FAIL "cargo cancel test not ok; see $cargo_log"
+    return
+  fi
+  if [[ ! -f "$py_log" ]] || ! grep -F -q 'test_verify_stream.py::test_gather_cancel_returns_no_dict PASSED' "$py_log"; then
+    record async-streaming-verifier FAIL "python gather cancel not passed; see $py_log"
+    return
+  fi
+  if ! grep -q 'asyncio.gather' "$REPO_ROOT/bindings/python/tests/test_verify_stream.py"; then
+    record async-streaming-verifier FAIL "python gather cancel test missing"
+    return
+  fi
+  record async-streaming-verifier PASS "async fn, backpressure, cancel, python gather cancel"
+}
+
 record_hmac() {
   local cargo_log=$EVIDENCE/cargo-test.log
   local py_log=$EVIDENCE/python-abi3.log
@@ -525,7 +551,24 @@ fi
 if ! check_cargo; then
   fail_missing cargo-test "cargo missing; fail closed"
 else
-  run_existing cargo-test cargo test --workspace
+  cargo_log=$EVIDENCE/cargo-test.log
+  stream_log=$EVIDENCE/cargo-test-stream.log
+  workspace_ok=0
+  stream_ok=0
+  if run_logged "$cargo_log" cargo test --workspace; then
+    workspace_ok=1
+  fi
+  if run_logged "$stream_log" cargo test -p agent-receipts --features stream; then
+    stream_ok=1
+  fi
+  if [[ -f "$stream_log" ]]; then
+    cat "$stream_log" >>"$cargo_log"
+  fi
+  if [[ $workspace_ok -eq 1 && $stream_ok -eq 1 ]]; then
+    record cargo-test PASS "see $cargo_log"
+  else
+    record cargo-test FAIL "see $cargo_log"
+  fi
 fi
 
 PYTHON_BIN=""
@@ -574,7 +617,7 @@ fi
 record_hmac
 record_authority
 record_public_api
-record_reserved async-streaming-verifier 'async[[:space:]]+fn'
+record_stream
 record_benchmarks
 record_pending_kinds
 
