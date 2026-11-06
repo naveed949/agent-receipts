@@ -131,12 +131,15 @@ enum LineClass {
 }
 
 fn classify_line(body: &[u8], key: &[u8]) -> LineClass {
-    if crate::verify_audit_receipt_bytes(body, key) {
-        LineClass::Ok
-    } else if crate::parse::parse(body).is_ok() {
-        LineClass::Invalid
-    } else {
-        LineClass::Malformed
+    match crate::parse::parse(body) {
+        Err(_) => LineClass::Malformed,
+        Ok(value) => {
+            if crate::verify_audit_receipt(&value, key) {
+                LineClass::Ok
+            } else {
+                LineClass::Invalid
+            }
+        }
     }
 }
 
@@ -350,6 +353,24 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn extra_top_level_field_is_invalid_because_parse_ok_and_mac_fails() {
+        let (body, key) = v1_body_and_key();
+        let extra = with_extra_top_level(&body);
+        assert!(parse(&extra).is_ok());
+        assert!(!crate::verify_audit_receipt_bytes(&extra, &key));
+        assert!(matches!(classify_line(&extra, &key), LineClass::Invalid));
+    }
+
+    #[test]
+    fn foreign_object_is_invalid_because_parse_ok_and_mac_fails() {
+        let (_body, key) = v1_body_and_key();
+        let foreign = br#"{"foo":1,"bar":2}"#;
+        assert!(parse(foreign).is_ok());
+        assert!(!crate::verify_audit_receipt_bytes(foreign, &key));
+        assert!(matches!(classify_line(foreign, &key), LineClass::Invalid));
+    }
+
     #[tokio::test]
     async fn identity_compact_v1_receipt_matches_bytes_verify() {
         let (body, key) = v1_body_and_key();
@@ -391,6 +412,17 @@ mod tests {
         assert_eq!(counts.malformed, 8);
         assert_eq!(counts.lines(), 9);
         assert!(crate::verify_audit_receipt_bytes(&body, &key));
+
+        let mut extra_file = Vec::new();
+        push_line(&mut extra_file, &with_extra_top_level(&body));
+        push_line(&mut extra_file, br#"{"foo":1,"bar":2}"#);
+        extra_file.extend_from_slice(b" \t\n");
+        extra_file.extend_from_slice(b"\n");
+        let mixed = count_bytes(&extra_file, &key, StreamLimits::default()).await;
+        assert_eq!(mixed.ok, 0);
+        assert_eq!(mixed.invalid, 2);
+        assert_eq!(mixed.malformed, 2);
+        assert_eq!(mixed.lines(), 4);
     }
 
     #[tokio::test]
@@ -592,6 +624,13 @@ mod tests {
         })
     }
 
+    fn with_extra_top_level(body: &[u8]) -> Vec<u8> {
+        let value = parse(body).expect("json");
+        let mut entries = value.as_object().expect("object").to_vec();
+        entries.push((Wtf16::from_str("zzz_extra"), Json::bool(true)));
+        crate::canonical_json_value(&Json::object(entries).expect("object")).expect("canonical")
+    }
+
     fn v1_body_and_key() -> (Vec<u8>, Vec<u8>) {
         let root = vectors_root();
         let rows = field(root, "vectors").as_array().expect("vectors");
@@ -712,8 +751,9 @@ mod tests {
         assert_eq!(counts.lines(), 1_000_000);
         let secs = elapsed.as_secs_f64();
         println!(
-            "method limiter=(capacity+2)*max_line_len+8192={} plus one Json tree; results consumed; line count asserted",
-            limits.max_retained_line_bytes()
+            "method limiter=(capacity+2)*max_line_len+8192={} plus one Json tree; results consumed; line count asserted; named ceiling is line-length-dependent (defaults ~34 MiB when every in-flight line is max_line_len); this run's lines were {} B so RSS is not that ceiling",
+            limits.max_retained_line_bytes(),
+            body.len() + 1
         );
         println!(
             "ok={} invalid={} malformed={} lines={}",

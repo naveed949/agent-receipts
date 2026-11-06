@@ -54,6 +54,7 @@ def test_short_key_still_returns_counts(tmp_path):
 
 
 def test_bad_key_type_is_type_error_before_awaitable():
+    assert m.verify_audit_receipt({"version": "nope"}, 1) is False
     with pytest.raises(TypeError, match="key must be bytes, bytearray, or str"):
         m.verify_stream("unused", 1)
 
@@ -115,6 +116,21 @@ def test_pathlike_and_truncated_receipt(tmp_path):
     ok, truncated = asyncio.run(go())
     assert ok["ok"] == 1
     assert truncated == {"ok": 0, "invalid": 0, "malformed": 1}
+
+
+def test_extra_field_and_foreign_object(tmp_path):
+    receipt, key = v1_receipt()
+    extra = dict(receipt)
+    extra["zzz_extra"] = True
+    path = tmp_path / "mix.jsonl"
+    extra_line = m.canonical_json(extra).encode("utf-8")
+    path.write_bytes(extra_line + b"\n" + b'{"foo":1,"bar":2}\n \t\n\n')
+
+    async def go():
+        return await m.verify_stream(str(path), key)
+
+    counts = asyncio.run(go())
+    assert counts == {"ok": 0, "invalid": 2, "malformed": 2}
 
 
 def test_malformed_oversized_and_truncated(tmp_path):
