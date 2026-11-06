@@ -63,7 +63,7 @@ The script drives every surface that exists on this checkout:
 | Surface | Command |
 | --- | --- |
 | `rustfmt` | `cargo fmt --all --check` |
-| `clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
+| `clippy` | `cargo clippy --workspace --all-targets -- -D warnings`, then `cargo clippy -p agent-receipts --all-targets --features stream -- -D warnings`, with the stream log appended to `clippy.log` |
 | `cargo-test` | `cargo test --workspace`, then `cargo test -p agent-receipts --features stream`, with the stream log appended to `cargo-test.log` (includes `crates/core/tests/public_api.rs`, `crates/core/tests/vectors.rs` over `vectors/text`, and the reference runner) |
 | `python-abi3` | `maturin build --release --manifest-path bindings/python/Cargo.toml --interpreter python3`, install the wheel path maturin reports for this build, then `python3 -m pytest -v bindings/python/tests` |
 | `node-napi` | in `bindings/node`: `npm ci`, `npm run build`, `npm test` |

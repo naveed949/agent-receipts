@@ -20,11 +20,11 @@ Preconditions:
 - `rustc` 1.83 is active through `rust-toolchain.toml`.
 
 - **Doctor.** Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh doctor`. If clippy is missing, doctor exits 1.
-- **Lint.** Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh`. The `clippy` row is `PASS` and `clippy.log` ends without `error: could not compile`.
+- **Lint.** Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh`. The `clippy` row is `PASS` and `clippy.log` ends without `error: could not compile`. The script also runs `cargo clippy -p agent-receipts --all-targets --features stream -- -D warnings` and appends that log.
 - **Missing tool.** If clippy is missing, the row is `FAIL`. It is not `PASS`.
 
 ## Gotchas
 
 - `cargo clippy` without `-D warnings` can exit 0 with warnings. That is not this surface.
-- Workspace clippy does not pass `--all-features`. CI also runs `cargo clippy -p agent-receipts --all-targets --features stream -- -D warnings`.
+- Workspace clippy does not pass `--all-features`. The script and CI also run `cargo clippy -p agent-receipts --all-targets --features stream -- -D warnings`.
 - `--all-targets` is required so the core tests are linted. It is not what compiles `bindings/node/build.rs`. That file is a member build script, so Clippy compiles it when it checks the node library.

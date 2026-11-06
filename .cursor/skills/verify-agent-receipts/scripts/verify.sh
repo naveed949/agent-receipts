@@ -545,7 +545,24 @@ fi
 if ! check_clippy; then
   fail_missing clippy "clippy missing; fail closed"
 else
-  run_existing clippy cargo clippy --workspace --all-targets -- -D warnings
+  clippy_log=$EVIDENCE/clippy.log
+  stream_clippy_log=$EVIDENCE/clippy-stream.log
+  workspace_clippy_ok=0
+  stream_clippy_ok=0
+  if run_logged "$clippy_log" cargo clippy --workspace --all-targets -- -D warnings; then
+    workspace_clippy_ok=1
+  fi
+  if run_logged "$stream_clippy_log" cargo clippy -p agent-receipts --all-targets --features stream -- -D warnings; then
+    stream_clippy_ok=1
+  fi
+  if [[ -f "$stream_clippy_log" ]]; then
+    cat "$stream_clippy_log" >>"$clippy_log"
+  fi
+  if [[ $workspace_clippy_ok -eq 1 && $stream_clippy_ok -eq 1 ]]; then
+    record clippy PASS "see $clippy_log"
+  else
+    record clippy FAIL "see $clippy_log"
+  fi
 fi
 
 if ! check_cargo; then

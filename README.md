@@ -43,6 +43,7 @@ From the repository root, run these commands.
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p agent-receipts --all-targets --features stream -- -D warnings
 ```
 
 The entry points are `canonical_json` and `stable_hash` in Rust and Python, and `canonicalJson` and `stableHash` in Node. JSONL audit logs use `verify_audit_receipt_lines` with feature `stream`, and `verify_stream` in Python. Audit receipts use `verify_audit_receipt` and `resign_audit_receipt` (Node: `verifyAuditReceipt`, `resignAuditReceipt`). Controlled integrity uses `verify_controlled_integrity` and `sign_controlled_integrity` (Node: `verifyControlledIntegrity`, `signControlledIntegrity`). Authority policies use `compare_authority_contracts`, `normalize_authority_policy`, `normalize_https_authority_rules`, and `is_https_authority_subset` (Node: `compareAuthorityContracts`, `normalizeAuthorityPolicy`, `normalizeHttpsAuthorityRules`, `isHttpsAuthoritySubset`). The behavior is [Canonical JSON](docs/spec/canonical-json.md), [HMAC integrity](docs/spec/hmac.md), and [Authority-contract comparison](docs/spec/authority-contracts.md). The reasons for the format are in [Decisions](docs/DECISIONS.md). Compatibility rules are in [Versioning](docs/VERSIONING.md).
