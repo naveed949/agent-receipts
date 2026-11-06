@@ -1,6 +1,6 @@
 # Public API policy
 
-A breaking change to a documented public signature, result shape, or `.code` string fails a compile-time or host test. The contract is `docs/VERSIONING.md`.
+A breaking change to a documented public signature or enum variant fails a compile-time pin. A changed `.code` string fails a runtime `assert_eq` in `public_api.rs` or a host test. The contract is `docs/VERSIONING.md`. Signer failures on Python leave `.code` unset. Signer failures on Node use the napi status strings `TypeError` and `RangeError`.
 
 ## Sub-features
 

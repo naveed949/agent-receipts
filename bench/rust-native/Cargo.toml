@@ -1,0 +1,18 @@
+[package]
+name = "agent-receipts-bench-native"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.83"
+
+# Separate workspace so this binary is not a product workspace member.
+[workspace]
+
+[[bin]]
+name = "agent-receipts-bench-native"
+path = "src/main.rs"
+
+[dependencies]
+agent-receipts = { path = "../../crates/core" }
+serde_json = "=1.0.128"

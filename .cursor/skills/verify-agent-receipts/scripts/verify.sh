@@ -9,6 +9,8 @@ REPO_ROOT=$(cd "$SKILL_DIR/../../.." && pwd)
 . "$SCRIPT_DIR/hmac-surface.sh"
 # shellcheck source=public-api-surface.sh
 . "$SCRIPT_DIR/public-api-surface.sh"
+# shellcheck source=benchmarks-surface.sh
+. "$SCRIPT_DIR/benchmarks-surface.sh"
 
 unset CARGO_TARGET_DIR
 export CARGO_TARGET_DIR="$REPO_ROOT/target"
@@ -278,15 +280,44 @@ record_public_api() {
 }
 
 record_benchmarks() {
-  if [[ -d "$REPO_ROOT/benches" || -d "$REPO_ROOT/crates/core/benches" ]]; then
-    record benchmarks FAIL "benches/ exists; this skill does not drive it. Do not mark passed."
+  local reason
+  if reason=$(benchmarks_tripwire_reason "$REPO_ROOT"); then
+    record benchmarks FAIL "$reason"
     return
   fi
-  if grep -R --include='Cargo.toml' -n '\[\[bench\]\]' "$REPO_ROOT/crates" "$REPO_ROOT/bindings" >/dev/null 2>&1; then
-    record benchmarks FAIL "[[bench]] exists; this skill does not drive it. Do not mark passed."
+  if ! benchmarks_entry_present "$REPO_ROOT"; then
+    record benchmarks NOT_IMPLEMENTED "no bench/run on this checkout"
     return
   fi
-  record benchmarks NOT_IMPLEMENTED "no benches on this checkout"
+  local logf=$EVIDENCE/benchmarks.log
+  local results=$EVIDENCE/bench-results.json
+  if [[ -z "${PYTHON_BIN:-}" ]] || ! "$PYTHON_BIN" -c 'import agent_receipts' >/dev/null 2>&1; then
+    record benchmarks FAIL "Python wheel not importable"
+    return
+  fi
+  if [[ ! -f "$REPO_ROOT/bindings/node/index.js" ]]; then
+    record benchmarks FAIL "Node binding not built"
+    return
+  fi
+  if ! "$REPO_ROOT/bench/run" smoke --out "$results" --python "$PYTHON_BIN" >"$logf" 2>&1; then
+    record benchmarks FAIL "smoke failed; see $logf"
+    return
+  fi
+  if ! benchmarks_log_ok "$logf"; then
+    record benchmarks FAIL "benchmarks.log missing ts-baseline ok lines; see $logf"
+    return
+  fi
+  if ! "$REPO_ROOT/bench/run" parse "$results" >>"$logf" 2>&1; then
+    record benchmarks FAIL "parse rejected $results; see $logf"
+    return
+  fi
+  if [[ -f "$REPO_ROOT/bench/results/full.json" ]]; then
+    if ! "$REPO_ROOT/bench/run" parse "$REPO_ROOT/bench/results/full.json" >>"$logf" 2>&1; then
+      record benchmarks FAIL "parse rejected bench/results/full.json; see $logf"
+      return
+    fi
+  fi
+  record benchmarks PASS "smoke parsed; see $logf"
 }
 
 select_python() {
@@ -346,6 +377,8 @@ run_python_surface() {
 run_node_surface() {
   local logf=$EVIDENCE/node-napi.log
   (
+    set -euo pipefail
+    unset NAPI_RS_NATIVE_LIBRARY_PATH
     cd "$REPO_ROOT/bindings/node"
     echo "+ npm ci"
     npm ci

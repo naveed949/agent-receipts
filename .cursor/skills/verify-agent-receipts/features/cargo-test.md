@@ -1,6 +1,6 @@
 # Cargo tests
 
-`cargo test --workspace` runs the Rust unit tests, the public-API signature pin, the reference runner, and the custom vector runner that reads `vectors/text`.
+`cargo test --workspace` runs the Rust unit tests, the public-API pin, `keys.rs`, `no_panic.rs`, the reference runner, and the custom vector runner that reads `vectors/text`.
 
 ## Sub-features
 
@@ -8,13 +8,13 @@
 - `test-reference` runs the in-crate reference walker over `vectors/reference/vectors.json`.
 - `test-text` runs `crates/core/tests/vectors.rs` over every `vectors/text/*.json` file.
 - `test-empty` fails when that directory has no JSON files or the file set changes.
-- `test-public-api` compiles `crates/core/tests/public_api.rs` and records `test public_signatures_compile ... ok`.
+- `test-public-api` runs `crates/core/tests/public_api.rs`. The log records `test public_signatures_compile ... ok` and the other `fn name()` tests in that file.
 
 ## How to get to it (user POV)
 
 - Run `cargo test --workspace` from the repository root.
 - Run `cargo test -p agent-receipts` to run the core tests, including the text cases and the reference rows.
-- Run `scripts/verify.sh`, which runs the workspace command as the `cargo-test` surface.
+- Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh`, which runs the workspace command as the `cargo-test` surface.
 
 ## Driving it with verify.sh
 
@@ -33,4 +33,4 @@ Preconditions:
 - The text vector test uses `harness = false`. A silent skip of that target is a failure.
 - Success text vectors also require a second canonicalize pass that returns the same bytes.
 - Binding crates set `test = false`. Their behavior is covered by the Python and Node surfaces, not by this one.
-- An empty pending-kinds file is part of this log. It is not a skipped pass.
+- An empty pending-kinds file is the `reference-pending-kinds` row. A passing `cargo-test.log` does not contain `pending 0`. Cargo hides that stdout.

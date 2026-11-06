@@ -39,7 +39,7 @@ for section in Launch Doctor Drive Evidence Cleanup Helpers; do
   fi
 done
 
-for script in verify.sh agree.py check-layout.sh dump_canonicalize.rs dump_canonicalize.cjs dump_hmac.rs dump_hmac.cjs dump_hmac.py dump_compare.rs dump_compare.cjs dump_compare.py hmac-surface.sh prove-hmac-surface.sh; do
+for script in verify.sh agree.py check-layout.sh dump_canonicalize.rs dump_canonicalize.cjs dump_hmac.rs dump_hmac.cjs dump_hmac.py dump_compare.rs dump_compare.cjs dump_compare.py hmac-surface.sh prove-hmac-surface.sh benchmarks-surface.sh prove-benchmarks-surface.sh; do
   if [[ ! -e "$SCRIPT_DIR/$script" ]]; then
     fail "missing scripts/$script"
   else
@@ -47,8 +47,8 @@ for script in verify.sh agree.py check-layout.sh dump_canonicalize.rs dump_canon
   fi
 done
 
-if [[ ! -x "$SCRIPT_DIR/verify.sh" || ! -x "$SCRIPT_DIR/agree.py" || ! -x "$SCRIPT_DIR/check-layout.sh" || ! -x "$SCRIPT_DIR/dump_hmac.py" || ! -x "$SCRIPT_DIR/dump_compare.py" || ! -x "$SCRIPT_DIR/hmac-surface.sh" || ! -x "$SCRIPT_DIR/prove-hmac-surface.sh" ]]; then
-  fail "verify.sh, agree.py, check-layout.sh, dump_hmac.py, dump_compare.py, hmac-surface.sh, and prove-hmac-surface.sh must be executable"
+if [[ ! -x "$SCRIPT_DIR/verify.sh" || ! -x "$SCRIPT_DIR/agree.py" || ! -x "$SCRIPT_DIR/check-layout.sh" || ! -x "$SCRIPT_DIR/dump_hmac.py" || ! -x "$SCRIPT_DIR/dump_compare.py" || ! -x "$SCRIPT_DIR/hmac-surface.sh" || ! -x "$SCRIPT_DIR/prove-hmac-surface.sh" || ! -x "$SCRIPT_DIR/benchmarks-surface.sh" || ! -x "$SCRIPT_DIR/prove-benchmarks-surface.sh" ]]; then
+  fail "verify.sh, agree.py, check-layout.sh, dump_hmac.py, dump_compare.py, hmac-surface.sh, prove-hmac-surface.sh, benchmarks-surface.sh, and prove-benchmarks-surface.sh must be executable"
 else
   pass "executable bits"
 fi

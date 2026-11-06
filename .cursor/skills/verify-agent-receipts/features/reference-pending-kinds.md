@@ -19,7 +19,8 @@ Preconditions:
 - `vectors/reference/pending-kinds.txt` exists.
 
 - **Record emptiness.** Run `.cursor/skills/verify-agent-receipts/scripts/verify.sh`. The `reference-pending-kinds` row is `PASS` with `no pending kinds`.
-- **Stale list.** If the file names a kind that appears in core or binding sources, the row is `FAIL`.
+- **Stale list.** If the file names a kind that appears in core or binding sources, including Python and Node tests, the row is `FAIL` with `pending kind is present in source; this skill does not drive it`.
+- **Orphan list.** If the file is non-empty and no listed kind hits those trees, the row is `FAIL` with `pending kinds remain`.
 - **Count.** `node-napi.log` and `cross-language-agreement.log` contain `pending 0`, `canonicalize 8 ok` or `reference 8 ok`, `hmac 8 ok`, and `compare 7 ok`.
 - **Proof.** The summary table shows `PASS`. Never `NOT_IMPLEMENTED`.
 
