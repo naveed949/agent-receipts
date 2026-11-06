@@ -713,6 +713,13 @@ function readResults(bytes: Uint8Array, path?: string): Results {
       if (series.samplesNs.every((sample) => sample === 0)) {
         throw new Error("all-zero samples");
       }
+      if (mode === "full") {
+        const min = series.samplesNs.reduce((left, right) => Math.min(left, right));
+        const max = series.samplesNs.reduce((left, right) => Math.max(left, right));
+        if (min === max) {
+          throw new Error("identical samples");
+        }
+      }
     }
   }
   return results;

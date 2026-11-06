@@ -5,14 +5,14 @@
 ## Sub-features
 
 - `bench-smoke` runs the 23-row TypeScript vector gate, then one short process per implementation.
-- `bench-parse` accepts a results file only when the live TypeScript vector gate still prints 8/8/7, the recorded `vectorsSha256` matches this checkout, each sample array matches the plan for that mode, no series is all zeros, and a file named `full.json` has mode `full`.
+- `bench-parse` accepts a results file only when the live TypeScript vector gate still prints 8/8/7, the recorded `vectorsSha256` matches this checkout, each sample array matches the plan for that mode, no series is all zeros, no full-mode series is a constant, and a file named `full.json` has mode `full`.
 - `bench-tripwire` fails the row when `benches/` or `crates/core/benches` exists, or when a `[[bench]]` table exists under `crates/` or `bindings/`.
 
 ## How to get to it (user POV)
 
 - `./bench/run full` writes `bench/results/full.json` from a clean worktree. A dirty worktree writes `bench/results/full.dirty.json` and leaves the committed file alone.
 - `./bench/run smoke --out FILE --python PYTHON` writes a short results file. PYTHON is an interpreter that can import the installed wheel.
-- `./bench/run parse FILE` re-runs `bench/ts-baseline/gate.ts`, checks `vectorsSha256` against `vectors/reference/vectors.json`, and then checks the schema. It does not time anything. All-zero samples, a sha256 that is not this checkout, a `full.json` whose mode is smoke, and a full-mode file with smoke sample lengths exit nonzero.
+- `./bench/run parse FILE` re-runs `bench/ts-baseline/gate.ts`, checks `vectorsSha256` against `vectors/reference/vectors.json`, and then checks the schema. It does not time anything. All-zero samples, a sha256 that is not this checkout, a `full.json` whose mode is smoke, a full-mode file with smoke sample lengths, and a full-mode series whose samples are all equal exit nonzero. A smoke file may repeat a value among its five samples.
 
 ## Driving it with verify.sh
 
@@ -25,7 +25,7 @@ Preconditions:
 - **Smoke.** `verify.sh` runs `./bench/run smoke --out "$EVIDENCE/bench-results.json" --python "$PYTHON_BIN"` and writes stdout and stderr to `$EVIDENCE/benchmarks.log`.
 - **Log lines.** The log contains `ts-baseline canonicalize 8 ok`, `ts-baseline hmac 8 ok`, and `ts-baseline compare 7 ok`.
 - **Parse.** `./bench/run parse` exits 0 on `$EVIDENCE/bench-results.json`. When `bench/results/full.json` exists, parse also exits 0 on that file, which re-runs the vector gate against this checkout.
-- **Proof.** The summary table shows `PASS`. A missing wheel, a missing addon, a failing smoke, a missing log line, or a rejected file is `FAIL`. `benches/` at the repo root, `crates/core/benches`, or `[[bench]]` under `crates/` or `bindings/` is `FAIL` and is not `PASS`. `scripts/prove-benchmarks-surface.sh` rejects an all-zero sample file and a recorded sha256 that is not this checkout.
+- **Proof.** The summary table shows `PASS`. A missing wheel, a missing addon, a failing smoke, a missing log line, or a rejected file is `FAIL`. `benches/` at the repo root, `crates/core/benches`, or `[[bench]]` under `crates/` or `bindings/` is `FAIL` and is not `PASS`. `scripts/prove-benchmarks-surface.sh` rejects an all-zero sample file, a recorded sha256 that is not this checkout, and a clone of `full.json` whose every sample is 42.
 
 ## Gotchas
 

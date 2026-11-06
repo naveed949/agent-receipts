@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -61,16 +61,71 @@ writeFileSync(
 );
 expectReject(smokeEffortFull, "full-mode-smoke-effort");
 
+const smokeConstant = join(outDir, "smoke-constant-42.json");
+writeFileSync(
+  smokeConstant,
+  `${JSON.stringify(smokeFile({ samples: [42, 42, 42, 42, 42], sha: PINNED }))}\n`,
+);
+expectAccept(smokeConstant, "smoke-constant-42");
+
+const constant42Path = join(outDir, "constant-42.json");
+writeFileSync(constant42Path, `${JSON.stringify(constantClone(join(root, "bench/results/full.json")))}\n`);
+expectReject(constant42Path, "constant-42", "identical samples");
+
+expectAccept(join(root, "bench/results/full.json"), "committed-full");
+
 console.log("parse-repro ok");
 
-function expectReject(path: string, label: string): void {
+function expectReject(path: string, label: string, printed?: string): void {
   const child = spawnSync(join(root, "bench/run"), ["parse", path], { encoding: "utf8" });
+  const text = `${child.stdout ?? ""}${child.stderr ?? ""}`;
   if (child.status === 0) {
-    process.stderr.write(child.stdout ?? "");
-    process.stderr.write(child.stderr ?? "");
+    process.stderr.write(text);
     throw new Error(`${label} parse exited 0`);
   }
-  console.log(`${label} exit ${child.status}`);
+  if (printed !== undefined && !text.includes(printed)) {
+    process.stderr.write(text);
+    throw new Error(`${label} missing ${printed}`);
+  }
+  console.log(`${label} exit ${child.status}${printed !== undefined ? ` ${printed}` : ""}`);
+}
+
+function expectAccept(path: string, label: string): void {
+  const child = spawnSync(join(root, "bench/run"), ["parse", path], { encoding: "utf8" });
+  const text = `${child.stdout ?? ""}${child.stderr ?? ""}`;
+  if (child.status !== 0) {
+    process.stderr.write(text);
+    throw new Error(`${label} parse exited ${child.status}`);
+  }
+  if (!text.includes("parse ok")) {
+    process.stderr.write(text);
+    throw new Error(`${label} missing parse ok`);
+  }
+  console.log(`${label} parse ok`);
+}
+
+function constantClone(path: string): unknown {
+  const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (typeof parsed !== "object" || parsed === null || !("runs" in parsed) || !Array.isArray(parsed.runs)) {
+    throw new Error("clone runs");
+  }
+  for (const run of parsed.runs) {
+    if (typeof run !== "object" || run === null || !("series" in run) || !Array.isArray(run.series)) {
+      throw new Error("clone series");
+    }
+    for (const series of run.series) {
+      if (
+        typeof series !== "object" ||
+        series === null ||
+        !("samplesNs" in series) ||
+        !Array.isArray(series.samplesNs)
+      ) {
+        throw new Error("clone samples");
+      }
+      series.samplesNs = series.samplesNs.map(() => 42);
+    }
+  }
+  return parsed;
 }
 
 function smokeFile(opts: { samples: number[]; sha: string }) {
