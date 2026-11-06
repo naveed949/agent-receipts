@@ -39,6 +39,7 @@ jobs:
       - run: cargo clippy -p agent-receipts --all-targets --features stream -- -D warnings
       - run: cargo test --workspace
       - run: cargo test -p agent-receipts --features stream
+      - run: cargo test -p agent-receipts --features stream --release -- --ignored --nocapture million_line_receipts_per_sec
       - run: python3 -m pip install maturin==1.16.0
       - run: maturin build --release --manifest-path bindings/python/Cargo.toml --interpreter python3
       - name: Upload the abi3 wheel

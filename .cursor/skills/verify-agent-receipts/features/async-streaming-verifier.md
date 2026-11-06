@@ -5,7 +5,7 @@
 ## Sub-features
 
 - `stream-rust` is the feature-gated async function. It reuses `verify_audit_receipt_bytes` for each complete line.
-- `stream-backpressure` is the cargo test whose name contains `backpressure`. A full channel stops `poll_read`.
+- `stream-backpressure` is the cargo test whose name contains `backpressure`. A full channel makes `send` wait; `poll_read` is not entered while `send` is pending.
 - `stream-cancel` is the cargo test whose name contains `cancel`. Dropping the future drops the reader and returns no counts.
 - `stream-python` is `verify_stream`. `test_gather_cancel_returns_no_dict` cancels `asyncio.gather` and expects `CancelledError` with no dict.
 
@@ -31,4 +31,4 @@ Preconditions:
 - Workspace clippy does not pass `--all-features`. The stream lint is `cargo clippy -p agent-receipts --all-targets --features stream -- -D warnings`.
 - `cargo tree -p agent-receipts-node -i tokio` does not find tokio. Node does not depend on the stream feature.
 - A blocking `canonical_json` of one value is not this feature.
-- The ignored million-line test is not part of `verify.sh`. It is `cargo test -p agent-receipts --features stream --release -- --ignored million_line_receipts_per_sec`.
+- The ignored million-line test is not part of `verify.sh`. CI runs `cargo test -p agent-receipts --features stream --release -- --ignored --nocapture million_line_receipts_per_sec` and asserts `ok`, `invalid`, `malformed`, and `lines()`. The named ceiling at defaults is `(32 + 2) * 1048576 + 8192` bytes (~34 MiB) when in-flight lines are `max_line_len`. A 2022-byte line run reporting ~4 MB RSS is not that ceiling.
