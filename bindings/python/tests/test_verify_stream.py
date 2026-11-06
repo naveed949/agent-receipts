@@ -130,7 +130,7 @@ def test_extra_field_and_foreign_object(tmp_path):
         return await m.verify_stream(str(path), key)
 
     counts = asyncio.run(go())
-    assert counts == {"ok": 0, "invalid": 2, "malformed": 2}
+    assert counts == {"ok": 0, "invalid": 0, "malformed": 4}
 
 
 def test_malformed_oversized_and_truncated(tmp_path):

@@ -130,11 +130,41 @@ enum LineClass {
     Malformed,
 }
 
+const RECEIPT_TOP_LEVEL: &[&str] = &[
+    "artifacts",
+    "authority",
+    "authorityPolicyVersion",
+    "decision",
+    "executionDigest",
+    "gondolinHttps",
+    "id",
+    "integrity",
+    "outcome",
+    "recordedAt",
+    "requestHash",
+    "tool",
+    "version",
+];
+
+fn extra_top_level_key(value: &crate::Json) -> bool {
+    let Some(entries) = value.as_object() else {
+        return false;
+    };
+    entries.iter().any(|(key, _)| {
+        !RECEIPT_TOP_LEVEL
+            .iter()
+            .any(|name| key.units().iter().copied().eq(name.encode_utf16()))
+    })
+}
+
 fn classify_line(body: &[u8], key: &[u8]) -> LineClass {
     match crate::parse::parse(body) {
         Err(_) => LineClass::Malformed,
         Ok(value) => {
-            if crate::verify_audit_receipt(&value, key) {
+            if extra_top_level_key(&value) {
+                // extra JSON key does not reach HMAC
+                LineClass::Malformed
+            } else if crate::verify_audit_receipt(&value, key) {
                 LineClass::Ok
             } else {
                 LineClass::Invalid
@@ -354,21 +384,21 @@ mod tests {
     }
 
     #[test]
-    fn extra_top_level_field_is_invalid_because_parse_ok_and_mac_fails() {
+    fn extra_top_level_field_is_malformed_and_does_not_reach_hmac() {
         let (body, key) = v1_body_and_key();
         let extra = with_extra_top_level(&body);
         assert!(parse(&extra).is_ok());
         assert!(!crate::verify_audit_receipt_bytes(&extra, &key));
-        assert!(matches!(classify_line(&extra, &key), LineClass::Invalid));
+        assert!(matches!(classify_line(&extra, &key), LineClass::Malformed));
     }
 
     #[test]
-    fn foreign_object_is_invalid_because_parse_ok_and_mac_fails() {
+    fn foreign_object_with_unknown_fields_is_malformed() {
         let (_body, key) = v1_body_and_key();
         let foreign = br#"{"foo":1,"bar":2}"#;
         assert!(parse(foreign).is_ok());
         assert!(!crate::verify_audit_receipt_bytes(foreign, &key));
-        assert!(matches!(classify_line(foreign, &key), LineClass::Invalid));
+        assert!(matches!(classify_line(foreign, &key), LineClass::Malformed));
     }
 
     #[tokio::test]
@@ -420,8 +450,8 @@ mod tests {
         extra_file.extend_from_slice(b"\n");
         let mixed = count_bytes(&extra_file, &key, StreamLimits::default()).await;
         assert_eq!(mixed.ok, 0);
-        assert_eq!(mixed.invalid, 2);
-        assert_eq!(mixed.malformed, 2);
+        assert_eq!(mixed.invalid, 0);
+        assert_eq!(mixed.malformed, 4);
         assert_eq!(mixed.lines(), 4);
     }
 
@@ -751,7 +781,7 @@ mod tests {
         assert_eq!(counts.lines(), 1_000_000);
         let secs = elapsed.as_secs_f64();
         println!(
-            "method limiter=(capacity+2)*max_line_len+8192={} plus one Json tree; results consumed; line count asserted; named ceiling is line-length-dependent (defaults ~34 MiB when every in-flight line is max_line_len); this run's lines were {} B so RSS is not that ceiling",
+            "method limiter=(capacity+2)*max_line_len+8192={} plus one Json tree; results consumed; line count asserted; named ceiling is line-length-dependent (defaults 35659776 B ~35.7 MB when every in-flight line is max_line_len); this run's lines were {} B so RSS is not that ceiling",
             limits.max_retained_line_bytes(),
             body.len() + 1
         );
