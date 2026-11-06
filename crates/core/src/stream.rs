@@ -678,7 +678,7 @@ mod tests {
         )
     }
 
-    #[ignore = "writes and verifies 1000000 lines"]
+    #[ignore]
     #[tokio::test]
     async fn million_line_receipts_per_sec() {
         let (body, key) = v1_body_and_key();
