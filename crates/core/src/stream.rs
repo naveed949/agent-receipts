@@ -190,12 +190,8 @@ async fn emit(tx: &mpsc::Sender<FrameItem>, item: FrameItem) -> io::Result<()> {
             "verifier dropped",
         ));
     }
-    yield_between_frames().await;
-    Ok(())
-}
-
-async fn yield_between_frames() {
     tokio::task::coop::consume_budget().await;
+    Ok(())
 }
 
 async fn read_frames<R>(
@@ -235,7 +231,7 @@ async fn verify_frames(mut rx: mpsc::Receiver<FrameItem>, key: &[u8]) -> AuditRe
             FrameItem::Malformed => LineClass::Malformed,
         };
         counts.add(class);
-        yield_between_frames().await;
+        tokio::task::coop::consume_budget().await;
     }
     counts
 }
