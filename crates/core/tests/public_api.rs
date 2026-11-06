@@ -183,19 +183,34 @@ fn stream_public_items_are_pinned() {
     let _: fn(StreamLimits) -> usize = StreamLimits::capacity;
     let _: fn(StreamLimits) -> usize = StreamLimits::max_line_len;
     let _: fn(StreamLimits) -> usize = StreamLimits::max_retained_line_bytes;
+    let _: fn(StreamLimits) -> usize = StreamLimits::max_parse_tree_bytes;
     let _: fn() -> StreamLimits = StreamLimits::default;
     assert_eq!(limits.capacity(), 32);
     assert_eq!(limits.max_line_len(), 1_048_576);
-    assert_eq!(
-        limits.max_retained_line_bytes(),
-        (32 + 2) * 1_048_576 + 8192
-    );
+    let line_buffers = 32usize
+        .checked_add(2)
+        .and_then(|slots| slots.checked_mul(1_048_576))
+        .and_then(|lines| lines.checked_add(8192))
+        .expect("line-buffer ceiling");
+    let parse_trees = 1_048_576usize.checked_mul(4).expect("parse trees");
+    assert_eq!(limits.max_retained_line_bytes(), line_buffers);
+    assert_eq!(limits.max_parse_tree_bytes(), parse_trees);
     assert_eq!(
         match LimitsError::ZeroCapacity {
             LimitsError::ZeroCapacity => "capacity must be greater than zero",
             LimitsError::ZeroMaxLineLen => "max_line_len must be greater than zero",
+            LimitsError::CapacityTooLarge => "capacity exceeds the channel permit limit",
+            LimitsError::Overflow => "retained line bytes overflowed usize",
         },
         LimitsError::ZeroCapacity.to_string()
+    );
+    assert_eq!(
+        LimitsError::CapacityTooLarge.to_string(),
+        "capacity exceeds the channel permit limit"
+    );
+    assert_eq!(
+        LimitsError::Overflow.to_string(),
+        "retained line bytes overflowed usize"
     );
 
     let counts = AuditReceiptCounts {

@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import inspect
 import json
 import os
@@ -77,9 +78,63 @@ def test_limit_overflow():
         m.verify_stream("unused", b"k", capacity=2**128)
 
 
-def test_bytes_path_is_type_error():
-    with pytest.raises(TypeError):
-        m.verify_stream(b"/tmp/x", b"k")
+def test_non_utf8_path(tmp_path):
+    receipt, key = v1_receipt()
+    body = m.canonical_json(receipt).encode("utf-8") + b"\n"
+    raw = os.path.join(os.fsencode(tmp_path), b"caf\xff.jsonl")
+    fd = os.open(raw, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o644)
+    os.write(fd, body)
+    os.close(fd)
+    sur = os.fsdecode(raw)
+    assert open(sur, "rb").read() == body
+
+    async def go():
+        via_str = await m.verify_stream(sur, key)
+        via_bytes = await m.verify_stream(raw, key)
+
+        class BytesLike:
+            def __fspath__(self):
+                return raw
+
+        via_pathlike = await m.verify_stream(BytesLike(), key)
+        return via_str, via_bytes, via_pathlike
+
+    via_str, via_bytes, via_pathlike = asyncio.run(go())
+    assert via_str == {"ok": 1, "invalid": 0, "malformed": 0}
+    assert via_bytes == via_str
+    assert via_pathlike == via_str
+
+
+def test_python_del_leak(tmp_path):
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+
+    async def scenario():
+        fut = m.verify_stream(str(fifo), b"k", capacity=1, max_line_len=8)
+        writer = await asyncio.to_thread(os.open, fifo, os.O_WRONLY)
+        await asyncio.sleep(0.05)
+        del fut
+        gc.collect()
+        await asyncio.sleep(0.2)
+        writes = []
+        for _ in range(2):
+            try:
+                writes.append(("wrote", os.write(writer, b"abc")))
+            except BrokenPipeError as err:
+                writes.append(("epipe", err.errno))
+            await asyncio.sleep(0.05)
+        os.close(writer)
+        return writes
+
+    writes = asyncio.run(scenario())
+    assert any(kind == "epipe" for kind, _ in writes), writes
+
+
+def test_stream_limits_panic():
+    with pytest.raises(ValueError, match="capacity exceeds the channel permit limit"):
+        m.verify_stream("unused", b"k", capacity=(1 << 64) - 1)
+    with pytest.raises(ValueError, match="retained line bytes overflowed usize"):
+        m.verify_stream("unused", b"k", max_line_len=(1 << 64) - 1)
 
 
 def test_limits_are_keyword_only(tmp_path):

@@ -1,10 +1,11 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use pyo3::exceptions::{PyException, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{
-    PyBool, PyByteArray, PyBytes, PyDict, PyFloat, PyInt, PyList, PyModule, PyString,
+    PyBool, PyByteArray, PyBytes, PyDict, PyFloat, PyInt, PyList, PyModule, PyString, PyTuple,
 };
 
 const _: () = assert!(receipts::DEFAULT_STREAM_CAPACITY == 32);
@@ -466,7 +467,7 @@ fn verify_stream<'py>(
         .with_max_line_len(max_line_len.0)
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     ensure_stream_runtime();
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+    let work = async move {
         let file = tokio::fs::File::open(&path).await.map_err(PyErr::from)?;
         let counts = receipts::verify_audit_receipt_lines(file, &key, limits)
             .await
@@ -478,7 +479,93 @@ fn verify_stream<'py>(
             dict.set_item("malformed", counts.malformed)?;
             Ok(dict.unbind())
         })
-    })
+    };
+    let handle = pyo3_async_runtimes::tokio::get_runtime().spawn(work);
+    let abort = handle.abort_handle();
+    let waiter = async move {
+        match handle.await {
+            Ok(result) => result,
+            Err(err) if err.is_cancelled() => Python::attach(|py| {
+                let dict = PyDict::new(py);
+                dict.set_item("ok", 0)?;
+                dict.set_item("invalid", 0)?;
+                dict.set_item("malformed", 0)?;
+                Ok(dict.unbind())
+            }),
+            Err(err) => Err(pyo3::exceptions::PyException::new_err(format!(
+                "rust future panicked: {err}"
+            ))),
+        }
+    };
+    let inner = pyo3_async_runtimes::tokio::future_into_py(py, waiter)?;
+    Bound::new(
+        py,
+        StreamAwait {
+            abort: Some(abort),
+            inner: inner.unbind(),
+        },
+    )
+    .map(|bound| bound.into_any())
+}
+
+#[pyclass(name = "_StreamAwait", module = "agent_receipts")]
+struct StreamAwait {
+    abort: Option<tokio::task::AbortHandle>,
+    inner: Py<PyAny>,
+}
+
+#[pymethods]
+impl StreamAwait {
+    fn __await__(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<StreamAwaitIter>> {
+        let inner = slf.bind(py).borrow().inner.clone_ref(py);
+        let gen = inner.bind(py).call_method0("__await__")?;
+        Bound::new(
+            py,
+            StreamAwaitIter {
+                _owner: slf,
+                inner: gen.unbind(),
+            },
+        )
+        .map(|bound| bound.unbind())
+    }
+}
+
+impl Drop for StreamAwait {
+    fn drop(&mut self) {
+        if let Some(abort) = self.abort.take() {
+            abort.abort();
+        }
+    }
+}
+
+#[pyclass(name = "_StreamAwaitIter", module = "agent_receipts")]
+struct StreamAwaitIter {
+    _owner: Py<StreamAwait>,
+    inner: Py<PyAny>,
+}
+
+#[pymethods]
+impl StreamAwaitIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        Ok(self.inner.bind(py).call_method0("__next__")?.unbind())
+    }
+
+    fn send(&self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        Ok(self.inner.bind(py).call_method1("send", (value,))?.unbind())
+    }
+
+    #[pyo3(signature = (*args))]
+    fn throw(&self, py: Python<'_>, args: Bound<'_, PyTuple>) -> PyResult<Py<PyAny>> {
+        Ok(self.inner.bind(py).call_method1("throw", args)?.unbind())
+    }
+
+    fn close(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        Ok(self.inner.bind(py).call_method0("close")?.unbind())
+    }
 }
 
 fn copied_stream_key(value: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
@@ -497,21 +584,44 @@ fn copied_stream_key(value: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
 }
 
 fn copied_path(value: &Bound<'_, PyAny>) -> PyResult<PathBuf> {
-    if value.cast_exact::<PyBytes>().is_ok() || value.cast_exact::<PyByteArray>().is_ok() {
-        return Err(PyTypeError::new_err("path must be a str or os.PathLike"));
+    if let Ok(bytes) = value.cast_exact::<PyBytes>() {
+        return path_from_os_bytes(bytes.as_bytes());
     }
-    if value.cast_exact::<PyString>().is_ok() {
-        let text: String = value.extract()?;
-        return Ok(PathBuf::from(text));
+    if let Ok(array) = value.cast_exact::<PyByteArray>() {
+        return path_from_os_bytes(&array.to_vec());
     }
-    let converted = PyModule::import(value.py(), "os")?
-        .getattr("fspath")?
-        .call1((value,))?;
+    let converted = if value.cast_exact::<PyString>().is_ok() {
+        value.clone()
+    } else {
+        PyModule::import(value.py(), "os")?
+            .getattr("fspath")?
+            .call1((value,))?
+    };
+    if let Ok(bytes) = converted.cast_exact::<PyBytes>() {
+        return path_from_os_bytes(bytes.as_bytes());
+    }
     if converted.cast_exact::<PyString>().is_err() {
-        return Err(PyTypeError::new_err("path must be a str or os.PathLike"));
+        return Err(PyTypeError::new_err(
+            "path must be a str, bytes, or os.PathLike",
+        ));
     }
-    let text: String = converted.extract()?;
-    Ok(PathBuf::from(text))
+    let encoded = converted.call_method("encode", ("utf-8", "surrogateescape"), None)?;
+    let raw = encoded.cast_exact::<PyBytes>()?;
+    path_from_os_bytes(raw.as_bytes())
+}
+
+fn path_from_os_bytes(bytes: &[u8]) -> PyResult<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        Ok(PathBuf::from(OsString::from_vec(bytes.to_vec())))
+    }
+    #[cfg(not(unix))]
+    {
+        let text = std::str::from_utf8(bytes)
+            .map_err(|_| PyTypeError::new_err("path must be a str, bytes, or os.PathLike"))?;
+        Ok(PathBuf::from(text))
+    }
 }
 
 fn ensure_stream_runtime() {
@@ -547,6 +657,8 @@ fn agent_receipts(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(normalize_https_authority_rules, module)?)?;
     module.add_function(wrap_pyfunction!(is_https_authority_subset, module)?)?;
     module.add_function(wrap_pyfunction!(verify_stream, module)?)?;
+    module.add_class::<StreamAwait>()?;
+    module.add_class::<StreamAwaitIter>()?;
     module.add("AUDIT_RECEIPT_VERSION", AUDIT_RECEIPT_VERSION)?;
     module.add("AUDIT_RECEIPT_V2_VERSION", AUDIT_RECEIPT_V2_VERSION)?;
     module.add("CONTROLLED_INTEGRITY_VERSION", CONTROLLED_INTEGRITY_VERSION)?;

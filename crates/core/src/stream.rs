@@ -27,22 +27,28 @@ pub struct StreamLimits {
 
 impl StreamLimits {
     pub const fn with_capacity(mut self, capacity: usize) -> Result<Self, LimitsError> {
-        match NonZeroUsize::new(capacity) {
-            Some(capacity) => {
-                self.capacity = capacity;
+        match check_limits(capacity, self.max_line_len()) {
+            Ok(()) => {
+                self.capacity = match NonZeroUsize::new(capacity) {
+                    Some(capacity) => capacity,
+                    None => return Err(LimitsError::ZeroCapacity),
+                };
                 Ok(self)
             }
-            None => Err(LimitsError::ZeroCapacity),
+            Err(err) => Err(err),
         }
     }
 
     pub const fn with_max_line_len(mut self, max_line_len: usize) -> Result<Self, LimitsError> {
-        match NonZeroUsize::new(max_line_len) {
-            Some(max_line_len) => {
-                self.max_line_len = max_line_len;
+        match check_limits(self.capacity(), max_line_len) {
+            Ok(()) => {
+                self.max_line_len = match NonZeroUsize::new(max_line_len) {
+                    Some(max_line_len) => max_line_len,
+                    None => return Err(LimitsError::ZeroMaxLineLen),
+                };
                 Ok(self)
             }
-            None => Err(LimitsError::ZeroMaxLineLen),
+            Err(err) => Err(err),
         }
     }
 
@@ -55,7 +61,17 @@ impl StreamLimits {
     }
 
     pub const fn max_retained_line_bytes(self) -> usize {
-        retained_line_bytes(self.capacity(), self.max_line_len())
+        match retained_line_bytes(self.capacity(), self.max_line_len()) {
+            Some(total) => total,
+            None => panic!("retained line bytes overflowed usize"),
+        }
+    }
+
+    pub const fn max_parse_tree_bytes(self) -> usize {
+        match parse_tree_bytes(self.max_line_len()) {
+            Some(total) => total,
+            None => panic!("parse tree bytes overflowed usize"),
+        }
     }
 }
 
@@ -68,25 +84,53 @@ impl Default for StreamLimits {
     }
 }
 
-const fn retained_line_bytes(capacity: usize, max_line_len: usize) -> usize {
+const MAX_CHANNEL_CAPACITY: usize = usize::MAX >> 3;
+const PARSE_TREE_BYTE_FACTOR: usize = 4;
+
+const fn retained_line_bytes(capacity: usize, max_line_len: usize) -> Option<usize> {
     let slots = match capacity.checked_add(2) {
         Some(slots) => slots,
-        None => panic!("retained line bytes overflowed usize"),
+        None => return None,
     };
     let lines = match slots.checked_mul(max_line_len) {
         Some(lines) => lines,
-        None => panic!("retained line bytes overflowed usize"),
+        None => return None,
     };
-    match lines.checked_add(READ_CHUNK) {
-        Some(total) => total,
-        None => panic!("retained line bytes overflowed usize"),
+    lines.checked_add(READ_CHUNK)
+}
+
+const fn parse_tree_bytes(max_line_len: usize) -> Option<usize> {
+    max_line_len.checked_mul(PARSE_TREE_BYTE_FACTOR)
+}
+
+const fn check_limits(capacity: usize, max_line_len: usize) -> Result<(), LimitsError> {
+    if capacity == 0 {
+        return Err(LimitsError::ZeroCapacity);
     }
+    if max_line_len == 0 {
+        return Err(LimitsError::ZeroMaxLineLen);
+    }
+    if capacity > MAX_CHANNEL_CAPACITY {
+        return Err(LimitsError::CapacityTooLarge);
+    }
+    let Some(line_buffers) = retained_line_bytes(capacity, max_line_len) else {
+        return Err(LimitsError::Overflow);
+    };
+    let Some(trees) = parse_tree_bytes(max_line_len) else {
+        return Err(LimitsError::Overflow);
+    };
+    if line_buffers.checked_add(trees).is_none() {
+        return Err(LimitsError::Overflow);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LimitsError {
     ZeroCapacity,
     ZeroMaxLineLen,
+    CapacityTooLarge,
+    Overflow,
 }
 
 impl fmt::Display for LimitsError {
@@ -94,6 +138,8 @@ impl fmt::Display for LimitsError {
         formatter.write_str(match self {
             LimitsError::ZeroCapacity => "capacity must be greater than zero",
             LimitsError::ZeroMaxLineLen => "max_line_len must be greater than zero",
+            LimitsError::CapacityTooLarge => "capacity exceeds the channel permit limit",
+            LimitsError::Overflow => "retained line bytes overflowed usize",
         })
     }
 }
@@ -253,6 +299,7 @@ where
                 emit(&tx, item).await?;
             }
         }
+        tokio::task::coop::consume_budget().await;
     }
 }
 
@@ -295,7 +342,8 @@ mod tests {
 
     use super::{
         classify_line, read_frames, verify_audit_receipt_lines, AuditReceiptCounts, LimitsError,
-        LineClass, StreamLimits, DEFAULT_MAX_LINE_LEN, DEFAULT_STREAM_CAPACITY, READ_CHUNK,
+        LineClass, StreamLimits, DEFAULT_MAX_LINE_LEN, DEFAULT_STREAM_CAPACITY,
+        MAX_CHANNEL_CAPACITY, PARSE_TREE_BYTE_FACTOR, READ_CHUNK,
     };
     use crate::{parse::parse, Json, Wtf16};
     use tokio::io::{AsyncRead, ReadBuf};
@@ -305,9 +353,17 @@ mod tests {
         let limits = StreamLimits::default();
         assert_eq!(limits.capacity(), DEFAULT_STREAM_CAPACITY);
         assert_eq!(limits.max_line_len(), DEFAULT_MAX_LINE_LEN);
+        let line_buffers = (DEFAULT_STREAM_CAPACITY + 2)
+            .checked_mul(DEFAULT_MAX_LINE_LEN)
+            .expect("line buffers")
+            .checked_add(READ_CHUNK)
+            .expect("scratch");
+        assert_eq!(limits.max_retained_line_bytes(), line_buffers);
         assert_eq!(
-            limits.max_retained_line_bytes(),
-            (DEFAULT_STREAM_CAPACITY + 2) * DEFAULT_MAX_LINE_LEN + READ_CHUNK
+            limits.max_parse_tree_bytes(),
+            DEFAULT_MAX_LINE_LEN
+                .checked_mul(PARSE_TREE_BYTE_FACTOR)
+                .expect("trees")
         );
         assert_eq!(
             limits.with_capacity(0).unwrap_err(),
@@ -331,6 +387,14 @@ mod tests {
         assert_eq!(
             LimitsError::ZeroMaxLineLen.to_string(),
             "max_line_len must be greater than zero"
+        );
+        assert_eq!(
+            LimitsError::CapacityTooLarge.to_string(),
+            "capacity exceeds the channel permit limit"
+        );
+        assert_eq!(
+            LimitsError::Overflow.to_string(),
+            "retained line bytes overflowed usize"
         );
         let counts = AuditReceiptCounts {
             ok: 1,
@@ -547,6 +611,97 @@ mod tests {
         assert_eq!(before, after);
     }
 
+    #[tokio::test]
+    async fn oversized_discard_cancel() {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let body = 2 * 1024 * 1024;
+        let reader = OversizedDiscardReader {
+            polls: Arc::clone(&polls),
+            remaining: body,
+        };
+        let limits = StreamLimits::default()
+            .with_max_line_len(8)
+            .expect("max line");
+        let after_first = {
+            let fut = verify_audit_receipt_lines(reader, b"k", limits);
+            tokio::pin!(fut);
+            poll_until_pending(&mut fut).await;
+            let after_first = polls.load(Ordering::SeqCst);
+            assert!(after_first > 0);
+            let full_reads = body.div_ceil(READ_CHUNK);
+            assert!(
+                after_first < full_reads,
+                "ready discard consumed the whole file in one poll: {after_first} >= {full_reads}"
+            );
+            after_first
+        };
+        assert_eq!(after_first, polls.load(Ordering::SeqCst));
+
+        let handle = tokio::spawn(verify_audit_receipt_lines(
+            std::io::Cursor::new(vec![b'x'; body]),
+            b"k",
+            limits,
+        ));
+        tokio::task::yield_now().await;
+        handle.abort();
+        let join = handle.await;
+        assert!(join.unwrap_err().is_cancelled());
+    }
+
+    #[test]
+    fn stream_limits_panic() {
+        let limits = StreamLimits::default();
+        assert_eq!(
+            limits.with_capacity(usize::MAX).unwrap_err(),
+            LimitsError::CapacityTooLarge
+        );
+        assert_eq!(
+            limits.with_max_line_len(usize::MAX).unwrap_err(),
+            LimitsError::Overflow
+        );
+        assert_eq!(
+            limits
+                .with_capacity(MAX_CHANNEL_CAPACITY.saturating_add(1))
+                .unwrap_err(),
+            LimitsError::CapacityTooLarge
+        );
+        let ceiling = std::panic::catch_unwind(|| limits.max_retained_line_bytes());
+        assert_eq!(
+            ceiling.expect("default ceiling"),
+            (DEFAULT_STREAM_CAPACITY + 2) * DEFAULT_MAX_LINE_LEN + READ_CHUNK
+        );
+        let trees = std::panic::catch_unwind(|| limits.max_parse_tree_bytes());
+        assert_eq!(
+            trees.expect("default trees"),
+            DEFAULT_MAX_LINE_LEN * PARSE_TREE_BYTE_FACTOR
+        );
+    }
+
+    #[test]
+    fn memory_ceiling_understatement() {
+        let limits = StreamLimits::default();
+        let line_buffers = limits
+            .capacity()
+            .checked_add(2)
+            .and_then(|slots| slots.checked_mul(limits.max_line_len()))
+            .and_then(|lines| lines.checked_add(READ_CHUNK))
+            .expect("line-buffer ceiling");
+        let parse_trees = limits
+            .max_line_len()
+            .checked_mul(PARSE_TREE_BYTE_FACTOR)
+            .expect("parse trees");
+        let rss = line_buffers
+            .checked_add(parse_trees)
+            .expect("process RSS bound");
+        assert_eq!(limits.max_retained_line_bytes(), line_buffers);
+        assert_eq!(limits.max_parse_tree_bytes(), parse_trees);
+        assert!(rss > line_buffers);
+        assert_eq!(
+            rss - line_buffers,
+            limits.max_line_len() * PARSE_TREE_BYTE_FACTOR
+        );
+    }
+
     async fn count_bytes(bytes: &[u8], key: &[u8], limits: StreamLimits) -> AuditReceiptCounts {
         verify_audit_receipt_lines(std::io::Cursor::new(bytes.to_vec()), key, limits)
             .await
@@ -564,6 +719,30 @@ mod tests {
             Poll::Ready(_) => panic!("future finished"),
         })
         .await;
+    }
+
+    struct OversizedDiscardReader {
+        polls: Arc<AtomicUsize>,
+        remaining: usize,
+    }
+
+    impl AsyncRead for OversizedDiscardReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let this = self.get_mut();
+            this.polls.fetch_add(1, Ordering::SeqCst);
+            if this.remaining == 0 {
+                return Poll::Ready(Ok(()));
+            }
+            let n = buf.remaining().min(this.remaining);
+            buf.initialize_unfilled()[..n].fill(b'x');
+            buf.advance(n);
+            this.remaining -= n;
+            Poll::Ready(Ok(()))
+        }
     }
 
     struct LineReader {
@@ -781,8 +960,13 @@ mod tests {
         assert_eq!(counts.lines(), 1_000_000);
         let secs = elapsed.as_secs_f64();
         println!(
-            "method limiter=(capacity+2)*max_line_len+8192={} plus one Json tree; results consumed; line count asserted; named ceiling is line-length-dependent (defaults 35659776 B ~35.7 MB when every in-flight line is max_line_len); this run's lines were {} B so RSS is not that ceiling",
+            "method line_buffer_ceiling=(capacity+2)*max_line_len+READ_CHUNK={} parse_trees=2*utf16*max_line_len={} process_rss_bound={}; results consumed; line count asserted; line-buffer ceiling is computed from StreamLimits, not a 4 MB product bound; this run's lines were {} B so RSS is not that ceiling",
             limits.max_retained_line_bytes(),
+            limits.max_parse_tree_bytes(),
+            limits
+                .max_retained_line_bytes()
+                .checked_add(limits.max_parse_tree_bytes())
+                .expect("rss"),
             body.len() + 1
         );
         println!(
