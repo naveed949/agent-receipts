@@ -15,6 +15,8 @@ import {
 } from "./ts-baseline/index.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const VECTORS_JSON = join(root, "vectors/reference/vectors.json");
+const PINNED_VECTORS_SHA256 = "70507a2b636c05bf9841cb99921ff91908cd5e2ab7e270b14802f32727bbb7c1";
 
 declare const passedGateBrand: unique symbol;
 
@@ -72,6 +74,7 @@ type Environment = {
   readonly runs: number;
   readonly isolate: "process";
   readonly gcInTimedRegion: false;
+  readonly vectorsSha256: string;
 };
 
 type HostSeries = {
@@ -667,7 +670,7 @@ function rankHosts(series: readonly HostSeries[]): readonly HostSeries[] {
   );
 }
 
-function readResults(bytes: Uint8Array): Results {
+function readResults(bytes: Uint8Array, path?: string): Results {
   const parsed: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
   const rootRecord = needRecord(parsed, "results");
   exactKeys(rootRecord, ["schema", "mode", "environment", "vectorGate", "runs"]);
@@ -675,8 +678,26 @@ function readResults(bytes: Uint8Array): Results {
     throw new Error("schema");
   }
   const mode = needMode(rootRecord.mode);
+  if (path !== undefined && basename(path) === "full.json" && mode !== "full") {
+    throw new Error("full.json requires mode full");
+  }
   const environment = needEnvironment(rootRecord.environment, mode);
+  const liveSha = checkoutVectorsSha256();
+  if (liveSha !== PINNED_VECTORS_SHA256) {
+    throw new Error("vectors.json sha256");
+  }
+  if (environment.vectorsSha256 !== liveSha) {
+    throw new Error("vectorsSha256");
+  }
+  const liveGate = runVectorGate();
   const vectorGate = needGate(rootRecord.vectorGate);
+  if (
+    liveGate.canonicalize !== vectorGate.canonicalize ||
+    liveGate.hmac !== vectorGate.hmac ||
+    liveGate.compare !== vectorGate.compare
+  ) {
+    throw new Error("vectorGate");
+  }
   if (!Array.isArray(rootRecord.runs)) {
     throw new Error("runs");
   }
@@ -689,6 +710,9 @@ function readResults(bytes: Uint8Array): Results {
   for (const run of results.runs) {
     for (const series of run.series) {
       assertDerived(series.samplesNs);
+      if (series.samplesNs.every((sample) => sample === 0)) {
+        throw new Error("all-zero samples");
+      }
     }
   }
   return results;
@@ -832,7 +856,7 @@ function printReport(results: Results): void {
 async function main(argv: readonly string[]): Promise<number> {
   const args = parseArgs(argv);
   if (args.command === "parse") {
-    readResults(readFileSync(args.file));
+    readResults(readFileSync(args.file), args.file);
     console.log("parse ok");
     return 0;
   }
@@ -865,6 +889,7 @@ async function main(argv: readonly string[]): Promise<number> {
     runs: repeatsFor(args.command),
     isolate: "process",
     gcInTimedRegion: false,
+    vectorsSha256: checkoutVectorsSha256(),
   };
   const results = finish(args.command, environment, gate, runs);
   const path = outputPath(args.command, args.out, git.dirty);
@@ -1295,6 +1320,7 @@ function needEnvironment(value: unknown, mode: Mode): Environment {
     "runs",
     "isolate",
     "gcInTimedRegion",
+    "vectorsSha256",
   ]);
   if (typeof record.recordedAt !== "string" || record.recordedAt.length === 0) {
     throw new Error("recordedAt");
@@ -1337,7 +1363,19 @@ function needEnvironment(value: unknown, mode: Mode): Environment {
     runs: record.runs,
     isolate: "process",
     gcInTimedRegion: false,
+    vectorsSha256: needVectorsSha256(record.vectorsSha256),
   };
+}
+
+function needVectorsSha256(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
+    throw new Error("vectorsSha256");
+  }
+  return value;
+}
+
+function checkoutVectorsSha256(): string {
+  return createHash("sha256").update(readFileSync(VECTORS_JSON)).digest("hex");
 }
 
 function needAffinity(value: unknown): Affinity {

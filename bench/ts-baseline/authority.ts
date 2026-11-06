@@ -207,9 +207,11 @@ function compareScope(before: Scope, after: Scope): Change {
   if (before.kind === "any") {
     return { wide: false, narrow: true };
   }
+  const beforeSet = new Set(before.ids);
+  const afterSet = new Set(after.ids);
   return {
-    wide: after.ids.some((item) => !before.ids.includes(item)),
-    narrow: before.ids.some((item) => !after.ids.includes(item)),
+    wide: after.ids.some((item) => !beforeSet.has(item)),
+    narrow: before.ids.some((item) => !afterSet.has(item)),
   };
 }
 

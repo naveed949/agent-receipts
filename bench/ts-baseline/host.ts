@@ -254,56 +254,48 @@ function compareKeys(left: string, right: string): number {
 
 function emitString(value: string): string {
   const parts: string[] = ['"'];
+  let run = 0;
+  const flush = (end: number) => {
+    if (end > run) {
+      parts.push(value.slice(run, end));
+    }
+  };
   for (let index = 0; index < value.length; index += 1) {
     const unit = value.charCodeAt(index);
+    let escaped: string | undefined;
     if (unit === 0x22) {
-      parts.push('\\"');
-      continue;
-    }
-    if (unit === 0x5c) {
-      parts.push("\\\\");
-      continue;
-    }
-    if (unit === 0x08) {
-      parts.push("\\b");
-      continue;
-    }
-    if (unit === 0x0c) {
-      parts.push("\\f");
-      continue;
-    }
-    if (unit === 0x0a) {
-      parts.push("\\n");
-      continue;
-    }
-    if (unit === 0x0d) {
-      parts.push("\\r");
-      continue;
-    }
-    if (unit === 0x09) {
-      parts.push("\\t");
-      continue;
-    }
-    if (unit < 0x20) {
-      parts.push(hex4(unit));
-      continue;
-    }
-    if (unit >= 0xd800 && unit <= 0xdbff) {
+      escaped = '\\"';
+    } else if (unit === 0x5c) {
+      escaped = "\\\\";
+    } else if (unit === 0x08) {
+      escaped = "\\b";
+    } else if (unit === 0x0c) {
+      escaped = "\\f";
+    } else if (unit === 0x0a) {
+      escaped = "\\n";
+    } else if (unit === 0x0d) {
+      escaped = "\\r";
+    } else if (unit === 0x09) {
+      escaped = "\\t";
+    } else if (unit < 0x20) {
+      escaped = hex4(unit);
+    } else if (unit >= 0xd800 && unit <= 0xdbff) {
       const next = index + 1 < value.length ? value.charCodeAt(index + 1) : 0;
       if (next >= 0xdc00 && next <= 0xdfff) {
-        parts.push(value.slice(index, index + 2));
         index += 1;
         continue;
       }
-      parts.push(hex4(unit));
-      continue;
+      escaped = hex4(unit);
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      escaped = hex4(unit);
     }
-    if (unit >= 0xdc00 && unit <= 0xdfff) {
-      parts.push(hex4(unit));
-      continue;
+    if (escaped !== undefined) {
+      flush(index);
+      parts.push(escaped);
+      run = index + 1;
     }
-    parts.push(value.charAt(index));
   }
+  flush(value.length);
   parts.push('"');
   return parts.join("");
 }

@@ -87,6 +87,14 @@ else
   failed=1
 fi
 
+parse_proof=$PROOF_DIR/parse-repro
+if ! node --experimental-strip-types --disable-warning=ExperimentalWarning "$REPO_ROOT/bench/parse-repro.ts" "$parse_proof"; then
+  printf 'PROOF (i) FAIL: parse-repro did not reject zeros, fake sha, or smoke-shaped full.json\n'
+  failed=1
+else
+  printf 'PROOF (i) PASS: parse rejects zeros, fake sha, smoke-named full.json, and full-mode smoke effort\n'
+fi
+
 if [[ $failed -ne 0 ]]; then
   printf 'RESULT=FAIL\n'
   exit 1

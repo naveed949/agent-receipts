@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use crate::{canonical_json_value, Error, Json, Wtf16};
 
@@ -699,8 +699,10 @@ fn compare_scope(before: &Scope, after: &Scope) -> (bool, bool) {
         (_, Scope::Any) => (true, false),
         (Scope::Any, _) => (false, true),
         (Scope::Identifiers(before), Scope::Identifiers(after)) => {
-            let widened = after.iter().any(|item| !before.contains(item));
-            let narrowed = before.iter().any(|item| !after.contains(item));
+            let before_set: HashSet<&str> = before.iter().map(String::as_str).collect();
+            let after_set: HashSet<&str> = after.iter().map(String::as_str).collect();
+            let widened = after.iter().any(|item| !before_set.contains(item.as_str()));
+            let narrowed = before.iter().any(|item| !after_set.contains(item.as_str()));
             (widened, narrowed)
         }
     }
@@ -987,6 +989,25 @@ mod tests {
             result.narrowed,
             vec![AuthorityPath::FilesystemWrite, AuthorityPath::GitHooks]
         );
+    }
+
+    #[test]
+    fn identifier_membership_matches_set_equality() {
+        let shared: String = (0..400)
+            .map(|index| format!(r#""id{index}""#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let previous = format!(r#"{{"filesystem":{{"read":[{shared},"dup","dup"]}}}}"#);
+        let same = format!(r#"{{"filesystem":{{"read":["dup",{shared}]}}}}"#);
+        let wider = format!(r#"{{"filesystem":{{"read":[{shared},"dup","extra"]}}}}"#);
+        let same_result = cmp(&previous, &same);
+        assert_eq!(same_result.relationship, Relationship::Unchanged);
+        assert!(same_result.widened.is_empty());
+        assert!(same_result.narrowed.is_empty());
+        let wide_result = cmp(&previous, &wider);
+        assert_eq!(wide_result.relationship, Relationship::Widening);
+        assert_eq!(wide_result.widened, vec![AuthorityPath::FilesystemRead]);
+        assert!(wide_result.narrowed.is_empty());
     }
 
     #[test]
