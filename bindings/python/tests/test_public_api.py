@@ -20,6 +20,7 @@ FUNCTIONS = {
     "normalize_authority_policy": ("value",),
     "normalize_https_authority_rules": ("value",),
     "is_https_authority_subset": ("inner", "outer"),
+    "verify_stream": ("path", "key", "capacity", "max_line_len"),
 }
 
 CONSTANTS = {
@@ -40,6 +41,25 @@ def pin_parameters(signature, names):
             param.kind,
         )
         assert param.default is inspect.Parameter.empty, (param.name, param.default)
+
+
+def pin_verify_stream(signature):
+    params = tuple(signature.parameters.values())
+    assert tuple(param.name for param in params) == (
+        "path",
+        "key",
+        "capacity",
+        "max_line_len",
+    )
+    path, key, capacity, max_line_len = params
+    assert path.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert key.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert path.default is inspect.Parameter.empty
+    assert key.default is inspect.Parameter.empty
+    assert capacity.kind is inspect.Parameter.KEYWORD_ONLY
+    assert max_line_len.kind is inspect.Parameter.KEYWORD_ONLY
+    assert capacity.default == 32
+    assert max_line_len.default == 1048576
 
 
 def pin_compare_keys(got):
@@ -106,7 +126,11 @@ def test_exported_names():
 
 def test_function_signatures():
     for name, params in FUNCTIONS.items():
-        pin_parameters(inspect.signature(getattr(m, name)), params)
+        signature = inspect.signature(getattr(m, name))
+        if name == "verify_stream":
+            pin_verify_stream(signature)
+        else:
+            pin_parameters(signature, params)
 
 
 def test_compare_result_keys():

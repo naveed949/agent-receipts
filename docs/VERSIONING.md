@@ -18,19 +18,21 @@ Functions: `check_depth`, `canonical_json`, `stable_hash`, `canonical_json_value
 
 Public methods: `Error::code`, `Wtf16::from_units`, `Wtf16::from_str`, `Wtf16::units`, `Json::null`, `Json::bool`, `Json::number`, `Json::string`, `Json::array`, `Json::object`, `SignerError::code`, `SigningKey::utf8`, `AuthorityError::code`, `AuthorityPath::as_str`, `Relationship::as_str`.
 
+Feature `stream` also exports `DEFAULT_STREAM_CAPACITY` (`32`), `DEFAULT_MAX_LINE_LEN` (`1048576`), `StreamLimits`, `LimitsError`, `AuditReceiptCounts`, and `verify_audit_receipt_lines`. Those names are absent unless the crate is built with `--features stream`. `LimitsError` is `ZeroCapacity`, `ZeroMaxLineLen`, `CapacityTooLarge`, or `Overflow`. It is not `Error`, and it has no `.code()`. `StreamLimits::with_capacity`, `StreamLimits::with_max_line_len`, `StreamLimits::capacity`, `StreamLimits::max_line_len`, `StreamLimits::max_retained_line_bytes`, `StreamLimits::max_parse_tree_bytes`, and `AuditReceiptCounts::lines` are public. `max_retained_line_bytes` is the line-buffer ceiling `(capacity + 2) * max_line_len + 8192`. `max_parse_tree_bytes` is `4 * max_line_len`. Process RSS includes both plus the read block. `verify_audit_receipt_lines` takes `tokio::io::AsyncRead + Unpin`, a key, and `StreamLimits`, and returns `Result<AuditReceiptCounts, std::io::Error>`. `crates/core/tests/public_api.rs` pins those items in `stream_public_items_are_pinned`, which runs under `cargo test -p agent-receipts --features stream`.
+
 `AuthorityPath::ALL` is public. Enums are exhaustive. `Receipt` has a private field and no constructor. `Json` variants are private.
 
 `crates/core/tests/public_api.rs` names every public function signature and every public enum variant. A changed signature or a new variant fails that test at compile time. The same file asserts the sha256 of the committed `vectors/reference/vectors.json`.
 
 ### Python module `agent_receipts`
 
-Exported functions: `canonical_json`, `stable_hash`, `verify_audit_receipt`, `resign_audit_receipt`, `verify_controlled_integrity`, `sign_controlled_integrity`, `audit_signing_key`, `controlled_signing_key`, `compare_authority_contracts`, `normalize_authority_policy`, `normalize_https_authority_rules`, `is_https_authority_subset`.
+Exported functions: `canonical_json`, `stable_hash`, `verify_audit_receipt`, `resign_audit_receipt`, `verify_controlled_integrity`, `sign_controlled_integrity`, `audit_signing_key`, `controlled_signing_key`, `compare_authority_contracts`, `normalize_authority_policy`, `normalize_https_authority_rules`, `is_https_authority_subset`, `verify_stream`.
 
 Exported constants: `AUDIT_RECEIPT_VERSION`, `AUDIT_RECEIPT_V2_VERSION`, `CONTROLLED_INTEGRITY_VERSION`.
 
 Exported exception: `CanonicalizeError`.
 
-Every parameter on those functions is positional-or-keyword and has no default. `bindings/python/tests/test_public_api.py` asserts the exported names, that parameter rule, the compare result keys, and the host `.code` strings in [Error codes](#error-codes).
+Every parameter on those functions is positional-or-keyword and has no default, except `verify_stream`. `verify_stream(path, key, *, capacity=32, max_line_len=1048576)` takes `path` and `key` as required positional-or-keyword arguments. `capacity` and `max_line_len` are keyword-only. Their defaults are `DEFAULT_STREAM_CAPACITY` and `DEFAULT_MAX_LINE_LEN`. `path` is a `str`, `bytes`, `bytearray`, or `os.PathLike`. A `str` is encoded with `utf-8` and `surrogateescape` so a Linux name that is not UTF-8 still opens. Dropping the returned awaitable without awaiting it cancels the reader. The await returns a dict whose keys are exactly `ok`, `invalid`, and `malformed`. `malformed` is a JSON parse failure, a framing reject, or a JSON object with a top-level key outside the audit-receipt field set (that extra key does not reach HMAC). `invalid` is a JSON value with only known receipt keys whose MAC or linkage check fails. Empty and whitespace-only lines are `malformed`. `AuditReceiptCounts::lines` is `ok + invalid + malformed`. `bindings/python/tests/test_public_api.py` asserts the exported names, that parameter rule, the compare result keys, and the host `.code` strings in [Error codes](#error-codes).
 
 ### Node module `agent-receipts`
 

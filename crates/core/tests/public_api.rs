@@ -162,6 +162,80 @@ fn signing_key_variants_are_exhaustive() {
     }
 }
 
+#[cfg(feature = "stream")]
+#[test]
+fn stream_public_items_are_pinned() {
+    use agent_receipts::{
+        AuditReceiptCounts, LimitsError, StreamLimits, DEFAULT_MAX_LINE_LEN,
+        DEFAULT_STREAM_CAPACITY,
+    };
+
+    let _: usize = DEFAULT_STREAM_CAPACITY;
+    let _: usize = DEFAULT_MAX_LINE_LEN;
+    assert_eq!(DEFAULT_STREAM_CAPACITY, 32);
+    assert_eq!(DEFAULT_MAX_LINE_LEN, 1_048_576);
+
+    let limits = StreamLimits::default();
+    let _: fn(StreamLimits, usize) -> Result<StreamLimits, LimitsError> =
+        StreamLimits::with_capacity;
+    let _: fn(StreamLimits, usize) -> Result<StreamLimits, LimitsError> =
+        StreamLimits::with_max_line_len;
+    let _: fn(StreamLimits) -> usize = StreamLimits::capacity;
+    let _: fn(StreamLimits) -> usize = StreamLimits::max_line_len;
+    let _: fn(StreamLimits) -> usize = StreamLimits::max_retained_line_bytes;
+    let _: fn(StreamLimits) -> usize = StreamLimits::max_parse_tree_bytes;
+    let _: fn() -> StreamLimits = StreamLimits::default;
+    assert_eq!(limits.capacity(), 32);
+    assert_eq!(limits.max_line_len(), 1_048_576);
+    let line_buffers = 32usize
+        .checked_add(2)
+        .and_then(|slots| slots.checked_mul(1_048_576))
+        .and_then(|lines| lines.checked_add(8192))
+        .expect("line-buffer ceiling");
+    let parse_trees = 1_048_576usize.checked_mul(4).expect("parse trees");
+    assert_eq!(limits.max_retained_line_bytes(), line_buffers);
+    assert_eq!(limits.max_parse_tree_bytes(), parse_trees);
+    assert_eq!(
+        match LimitsError::ZeroCapacity {
+            LimitsError::ZeroCapacity => "capacity must be greater than zero",
+            LimitsError::ZeroMaxLineLen => "max_line_len must be greater than zero",
+            LimitsError::CapacityTooLarge => "capacity exceeds the channel permit limit",
+            LimitsError::Overflow => "retained line bytes overflowed usize",
+        },
+        LimitsError::ZeroCapacity.to_string()
+    );
+    assert_eq!(
+        LimitsError::CapacityTooLarge.to_string(),
+        "capacity exceeds the channel permit limit"
+    );
+    assert_eq!(
+        LimitsError::Overflow.to_string(),
+        "retained line bytes overflowed usize"
+    );
+
+    let counts = AuditReceiptCounts {
+        ok: 1,
+        invalid: 2,
+        malformed: 3,
+    };
+    let _: fn(AuditReceiptCounts) -> u128 = AuditReceiptCounts::lines;
+    let _: fn() -> AuditReceiptCounts = AuditReceiptCounts::default;
+    assert_eq!(counts.lines(), 6);
+    assert_eq!(AuditReceiptCounts::default().lines(), 0);
+
+    fn assert_stream_future<F>(future: F)
+    where
+        F: std::future::Future<Output = Result<AuditReceiptCounts, std::io::Error>>,
+    {
+        let _ = std::mem::size_of_val(&future);
+    }
+    assert_stream_future(agent_receipts::verify_audit_receipt_lines(
+        std::io::Cursor::new(Vec::<u8>::new()),
+        b"",
+        StreamLimits::default(),
+    ));
+}
+
 #[test]
 fn reference_vectors_sha256_is_pinned() {
     let bytes = include_bytes!("../../../vectors/reference/vectors.json");

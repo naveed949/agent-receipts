@@ -22,6 +22,14 @@ pub use hmac::{
     AUDIT_RECEIPT_VERSION, CONTROLLED_INTEGRITY_VERSION,
 };
 
+#[cfg(feature = "stream")]
+mod stream;
+#[cfg(feature = "stream")]
+pub use stream::{
+    verify_audit_receipt_lines, AuditReceiptCounts, LimitsError, StreamLimits,
+    DEFAULT_MAX_LINE_LEN, DEFAULT_STREAM_CAPACITY,
+};
+
 #[cfg(test)]
 mod reference;
 
