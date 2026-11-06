@@ -195,7 +195,6 @@ async fn emit(tx: &mpsc::Sender<FrameItem>, item: FrameItem) -> io::Result<()> {
 }
 
 async fn yield_between_frames() {
-    // A page-cache read returns Ready, so the budget is where cancel lands.
     tokio::task::coop::consume_budget().await;
 }
 
