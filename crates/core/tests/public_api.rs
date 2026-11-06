@@ -162,6 +162,53 @@ fn signing_key_variants_are_exhaustive() {
     }
 }
 
+#[cfg(feature = "stream")]
+#[test]
+fn stream_public_items_are_pinned() {
+    use agent_receipts::{
+        AuditReceiptCounts, LimitsError, StreamLimits, DEFAULT_MAX_LINE_LEN,
+        DEFAULT_STREAM_CAPACITY,
+    };
+
+    let _: usize = DEFAULT_STREAM_CAPACITY;
+    let _: usize = DEFAULT_MAX_LINE_LEN;
+    assert_eq!(DEFAULT_STREAM_CAPACITY, 32);
+    assert_eq!(DEFAULT_MAX_LINE_LEN, 1_048_576);
+
+    let limits = StreamLimits::default();
+    let _: fn(StreamLimits, usize) -> Result<StreamLimits, LimitsError> =
+        StreamLimits::with_capacity;
+    let _: fn(StreamLimits, usize) -> Result<StreamLimits, LimitsError> =
+        StreamLimits::with_max_line_len;
+    let _: fn(StreamLimits) -> usize = StreamLimits::capacity;
+    let _: fn(StreamLimits) -> usize = StreamLimits::max_line_len;
+    let _: fn(StreamLimits) -> usize = StreamLimits::max_retained_line_bytes;
+    let _: fn() -> StreamLimits = StreamLimits::default;
+    assert_eq!(limits.capacity(), 32);
+    assert_eq!(limits.max_line_len(), 1_048_576);
+    assert_eq!(
+        limits.max_retained_line_bytes(),
+        (32 + 2) * 1_048_576 + 8192
+    );
+    assert_eq!(
+        match LimitsError::ZeroCapacity {
+            LimitsError::ZeroCapacity => "capacity must be greater than zero",
+            LimitsError::ZeroMaxLineLen => "max_line_len must be greater than zero",
+        },
+        LimitsError::ZeroCapacity.to_string()
+    );
+
+    let counts = AuditReceiptCounts {
+        ok: 1,
+        invalid: 2,
+        malformed: 3,
+    };
+    let _: fn(AuditReceiptCounts) -> u128 = AuditReceiptCounts::lines;
+    let _: fn() -> AuditReceiptCounts = AuditReceiptCounts::default;
+    assert_eq!(counts.lines(), 6);
+    assert_eq!(AuditReceiptCounts::default().lines(), 0);
+}
+
 #[test]
 fn reference_vectors_sha256_is_pinned() {
     let bytes = include_bytes!("../../../vectors/reference/vectors.json");
