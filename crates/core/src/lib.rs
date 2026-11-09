@@ -22,6 +22,14 @@ pub use hmac::{
     AUDIT_RECEIPT_VERSION, CONTROLLED_INTEGRITY_VERSION,
 };
 
+#[cfg(feature = "stream")]
+mod stream;
+#[cfg(feature = "stream")]
+pub use stream::{
+    verify_audit_receipt_lines, AuditReceiptCounts, LimitsError, StreamLimits,
+    DEFAULT_MAX_LINE_LEN, DEFAULT_STREAM_CAPACITY,
+};
+
 #[cfg(test)]
 mod reference;
 
@@ -203,6 +211,28 @@ impl Json {
 
     pub(crate) fn is_object(&self) -> bool {
         matches!(self.node, Node::Object(_))
+    }
+}
+
+#[cfg(all(test, feature = "stream"))]
+pub(crate) fn json_retained_bytes(value: &Json) -> usize {
+    match &value.node {
+        Node::Null | Node::Bool(_) | Node::Number(_) => 0,
+        Node::String(text) => text.units.capacity() * std::mem::size_of::<u16>(),
+        Node::Array(items) => {
+            items.capacity() * std::mem::size_of::<Json>()
+                + items.iter().map(json_retained_bytes).sum::<usize>()
+        }
+        Node::Object(entries) => {
+            entries.capacity() * std::mem::size_of::<(Wtf16, Json)>()
+                + entries
+                    .iter()
+                    .map(|(key, child)| {
+                        key.units.capacity() * std::mem::size_of::<u16>()
+                            + json_retained_bytes(child)
+                    })
+                    .sum::<usize>()
+        }
     }
 }
 
