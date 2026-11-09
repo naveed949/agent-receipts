@@ -201,6 +201,10 @@ fn stream_public_items_are_pinned() {
     assert!(limits.max_parse_tree_bytes() >= number_trees);
     assert!(limits.max_parse_tree_bytes() >= nested_trees);
     assert!(limits.max_parse_tree_bytes() > 1_048_576 * 4);
+    let small = StreamLimits::default()
+        .with_max_line_len(5)
+        .expect("small line");
+    assert!(small.max_parse_tree_bytes() >= 2 * 4 * node);
     assert_eq!(
         match LimitsError::ZeroCapacity {
             LimitsError::ZeroCapacity => "capacity must be greater than zero",

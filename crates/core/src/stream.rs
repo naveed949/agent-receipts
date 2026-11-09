@@ -118,8 +118,11 @@ const fn json_vec_cap(n: usize) -> Option<usize> {
 
 const fn parse_tree_bytes(max_line_len: usize) -> Option<usize> {
     // Number array `[0,0,...,0]`: (max_line_len-1)/2 nodes, Vec next power of two.
-    // Nested `[[0],[0],...]` (and deeper 1-element spines) is denser: each inner
-    // array pays Vec's 4-slot minimum for a 32-byte Json.
+    // A 1-element array chain of depth d (`[[[0]]]`) is 2d+1 bytes and retains
+    // d * MIN_JSON_VEC_CAP * JSON_NODE_BYTES. Packing n copies of a d-deep chain
+    // in one outer array is n*(2d+2)+1 bytes (n items, n-1 commas, 2 brackets),
+    // so n = (max_line_len-1)/(2d+2). Using max_line_len-2 drops n=1, the lone
+    // chain with no comma, at every max_line_len = 2d+1.
     let n = max_line_len.saturating_sub(1) / 2;
     let cap = match json_vec_cap(n) {
         Some(cap) => cap,
@@ -135,38 +138,57 @@ const fn parse_tree_bytes(max_line_len: usize) -> Option<usize> {
             Some(two) => two,
             None => return None,
         };
+        let chain_len = match two.checked_add(1) {
+            Some(len) => len,
+            None => return None,
+        };
+        if chain_len <= max_line_len {
+            let slots = match depth.checked_mul(MIN_JSON_VEC_CAP) {
+                Some(slots) => slots,
+                None => return None,
+            };
+            let bytes = match slots.checked_mul(JSON_NODE_BYTES) {
+                Some(bytes) => bytes,
+                None => return None,
+            };
+            if bytes > best {
+                best = bytes;
+            }
+        }
         let item = match two.checked_add(2) {
             Some(item) => item,
             None => return None,
         };
         if item < max_line_len {
-            let n = (max_line_len - 2) / item;
-            let cap = match json_vec_cap(n) {
-                Some(cap) => cap,
-                None => return None,
-            };
-            let outer = match cap.checked_mul(JSON_NODE_BYTES) {
-                Some(bytes) => bytes,
-                None => return None,
-            };
-            let inner_nodes = match n.checked_mul(depth) {
-                Some(nodes) => nodes,
-                None => return None,
-            };
-            let inner_slots = match inner_nodes.checked_mul(MIN_JSON_VEC_CAP) {
-                Some(slots) => slots,
-                None => return None,
-            };
-            let inner = match inner_slots.checked_mul(JSON_NODE_BYTES) {
-                Some(bytes) => bytes,
-                None => return None,
-            };
-            let total = match outer.checked_add(inner) {
-                Some(total) => total,
-                None => return None,
-            };
-            if total > best {
-                best = total;
+            let n = (max_line_len - 1) / item;
+            if n > 0 {
+                let cap = match json_vec_cap(n) {
+                    Some(cap) => cap,
+                    None => return None,
+                };
+                let outer = match cap.checked_mul(JSON_NODE_BYTES) {
+                    Some(bytes) => bytes,
+                    None => return None,
+                };
+                let inner_nodes = match n.checked_mul(depth) {
+                    Some(nodes) => nodes,
+                    None => return None,
+                };
+                let inner_slots = match inner_nodes.checked_mul(MIN_JSON_VEC_CAP) {
+                    Some(slots) => slots,
+                    None => return None,
+                };
+                let inner = match inner_slots.checked_mul(JSON_NODE_BYTES) {
+                    Some(bytes) => bytes,
+                    None => return None,
+                };
+                let total = match outer.checked_add(inner) {
+                    Some(total) => total,
+                    None => return None,
+                };
+                if total > best {
+                    best = total;
+                }
             }
         }
         depth += 1;
@@ -414,7 +436,8 @@ mod tests {
     use super::{
         classify_line, json_vec_cap, parse_tree_bytes, read_frames, verify_audit_receipt_lines,
         AuditReceiptCounts, LimitsError, LineClass, StreamLimits, DEFAULT_MAX_LINE_LEN,
-        DEFAULT_STREAM_CAPACITY, JSON_NODE_BYTES, MAX_CHANNEL_CAPACITY, READ_CHUNK,
+        DEFAULT_STREAM_CAPACITY, JSON_NODE_BYTES, MAX_CHANNEL_CAPACITY, MIN_JSON_VEC_CAP,
+        READ_CHUNK,
     };
     use crate::{parse::parse, Json, Wtf16};
     use tokio::io::{AsyncRead, ReadBuf};
@@ -787,6 +810,97 @@ mod tests {
         assert_eq!(counts.ok, 0);
         assert_eq!(counts.invalid, 1);
         assert_eq!(counts.malformed, 0);
+    }
+
+    #[tokio::test]
+    async fn nested_chain_bound_covers_small_lines() {
+        let mut chain_fail = 0usize;
+        let mut depth = 2usize;
+        while depth <= crate::MAX_DEPTH {
+            let max_line_len = depth
+                .checked_mul(2)
+                .and_then(|bytes| bytes.checked_add(1))
+                .expect("chain length");
+            let limits = StreamLimits::default()
+                .with_max_line_len(max_line_len)
+                .expect("max line");
+            let bound = limits.max_parse_tree_bytes();
+            let old = comma_inclusive_spine_bound(max_line_len).expect("old bound");
+            let line = dense_nested_chain_line(depth);
+            let tree = crate::json_retained_bytes(&parse(&line).expect("chain"));
+            assert!(
+                tree > old,
+                "chain depth {depth} tree {tree} must exceed comma-inclusive bound {old}"
+            );
+            assert!(
+                tree <= bound,
+                "chain depth {depth} tree {tree} exceeds max_parse_tree_bytes {bound}"
+            );
+            if tree > old {
+                chain_fail += 1;
+            }
+            let mut file = line;
+            file.push(b'\n');
+            let counts = count_bytes(&file, b"k", limits).await;
+            assert_eq!(counts.ok, 0);
+            assert_eq!(counts.invalid, 1);
+            assert_eq!(counts.malformed, 0);
+            depth += 1;
+        }
+        assert_eq!(chain_fail, crate::MAX_DEPTH - 1);
+
+        for max_line_len in [5usize, 7, 9, 11] {
+            let limits = StreamLimits::default()
+                .with_max_line_len(max_line_len)
+                .expect("max line");
+            let bound = limits.max_parse_tree_bytes();
+            let old = comma_inclusive_spine_bound(max_line_len).expect("old bound");
+            let line = dense_nested_singleton_line(max_line_len);
+            let tree = crate::json_retained_bytes(&parse(&line).expect("packed"));
+            assert!(
+                tree <= bound,
+                "packed line_len={max_line_len} tree {tree} exceeds max_parse_tree_bytes {bound}"
+            );
+            if max_line_len == 5 {
+                assert!(
+                    tree > old,
+                    "packed line_len=5 tree {tree} must exceed comma-inclusive bound {old}"
+                );
+            }
+        }
+    }
+
+    fn comma_inclusive_spine_bound(max_line_len: usize) -> Option<usize> {
+        let n = max_line_len.saturating_sub(1) / 2;
+        let cap = json_vec_cap(n)?;
+        let mut best = cap.checked_mul(JSON_NODE_BYTES)?;
+        let mut depth = 1usize;
+        while depth <= crate::MAX_DEPTH {
+            let item = depth.checked_mul(2)?.checked_add(2)?;
+            if item < max_line_len {
+                let n = (max_line_len - 2) / item;
+                let cap = json_vec_cap(n)?;
+                let outer = cap.checked_mul(JSON_NODE_BYTES)?;
+                let inner = n
+                    .checked_mul(depth)?
+                    .checked_mul(MIN_JSON_VEC_CAP)?
+                    .checked_mul(JSON_NODE_BYTES)?;
+                let total = outer.checked_add(inner)?;
+                if total > best {
+                    best = total;
+                }
+            }
+            depth += 1;
+        }
+        Some(best)
+    }
+
+    fn dense_nested_chain_line(depth: usize) -> Vec<u8> {
+        let mut line = vec![b'['; depth];
+        line.push(b'0');
+        line.resize(depth * 2 + 1, b']');
+        assert_eq!(line.len(), depth * 2 + 1);
+        line
     }
 
     fn dense_nested_singleton_line(max_line_len: usize) -> Vec<u8> {
