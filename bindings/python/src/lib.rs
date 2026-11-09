@@ -468,41 +468,17 @@ fn verify_stream<'py>(
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     ensure_stream_runtime();
     let work = async move {
-        let file = tokio::fs::File::open(&path).await.map_err(PyErr::from)?;
-        let counts = receipts::verify_audit_receipt_lines(file, &key, limits)
-            .await
-            .map_err(PyErr::from)?;
-        Python::attach(|py| {
-            let dict = PyDict::new(py);
-            dict.set_item("ok", counts.ok)?;
-            dict.set_item("invalid", counts.invalid)?;
-            dict.set_item("malformed", counts.malformed)?;
-            Ok(dict.unbind())
-        })
+        let file = tokio::fs::File::open(&path).await?;
+        receipts::verify_audit_receipt_lines(file, &key, limits).await
     };
     let handle = pyo3_async_runtimes::tokio::get_runtime().spawn(work);
     let abort = handle.abort_handle();
-    let waiter = async move {
-        match handle.await {
-            Ok(result) => result,
-            Err(err) if err.is_cancelled() => Python::attach(|py| {
-                let dict = PyDict::new(py);
-                dict.set_item("ok", 0)?;
-                dict.set_item("invalid", 0)?;
-                dict.set_item("malformed", 0)?;
-                Ok(dict.unbind())
-            }),
-            Err(err) => Err(pyo3::exceptions::PyException::new_err(format!(
-                "rust future panicked: {err}"
-            ))),
-        }
-    };
-    let inner = pyo3_async_runtimes::tokio::future_into_py(py, waiter)?;
     Bound::new(
         py,
         StreamAwait {
             abort: Some(abort),
-            inner: inner.unbind(),
+            handle: Some(handle),
+            inner: None,
         },
     )
     .map(|bound| bound.into_any())
@@ -511,13 +487,46 @@ fn verify_stream<'py>(
 #[pyclass(name = "_StreamAwait", module = "agent_receipts")]
 struct StreamAwait {
     abort: Option<tokio::task::AbortHandle>,
-    inner: Py<PyAny>,
+    handle: Option<tokio::task::JoinHandle<Result<receipts::AuditReceiptCounts, std::io::Error>>>,
+    inner: Option<Py<PyAny>>,
 }
 
 #[pymethods]
 impl StreamAwait {
     fn __await__(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<StreamAwaitIter>> {
-        let inner = slf.bind(py).borrow().inner.clone_ref(py);
+        {
+            let mut this = slf.bind(py).borrow_mut();
+            if this.inner.is_none() {
+                let handle = this.handle.take().ok_or_else(|| {
+                    PyException::new_err("verify_stream awaitable already consumed")
+                })?;
+                let waiter = async move {
+                    match handle.await {
+                        Ok(Ok(counts)) => Python::attach(|py| {
+                            let dict = PyDict::new(py);
+                            dict.set_item("ok", counts.ok)?;
+                            dict.set_item("invalid", counts.invalid)?;
+                            dict.set_item("malformed", counts.malformed)?;
+                            Ok(dict.unbind())
+                        }),
+                        Ok(Err(err)) => Err(PyErr::from(err)),
+                        Err(err) if err.is_cancelled() => Err(PyException::new_err("cancelled")),
+                        Err(err) => {
+                            Err(PyException::new_err(format!("rust future panicked: {err}")))
+                        }
+                    }
+                };
+                let fut = pyo3_async_runtimes::tokio::future_into_py(py, waiter)?;
+                this.inner = Some(fut.unbind());
+            }
+        }
+        let inner = slf
+            .bind(py)
+            .borrow()
+            .inner
+            .as_ref()
+            .expect("inner")
+            .clone_ref(py);
         let gen = inner.bind(py).call_method0("__await__")?;
         Bound::new(
             py,
@@ -535,6 +544,7 @@ impl Drop for StreamAwait {
         if let Some(abort) = self.abort.take() {
             abort.abort();
         }
+        let _ = self.handle.take();
     }
 }
 

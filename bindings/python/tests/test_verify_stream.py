@@ -3,6 +3,8 @@ import gc
 import inspect
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -128,6 +130,30 @@ def test_python_del_leak(tmp_path):
 
     writes = asyncio.run(scenario())
     assert any(kind == "epipe" for kind, _ in writes), writes
+
+
+def test_python_del_leak_exit():
+    script = (
+        "import asyncio\n"
+        "import agent_receipts as m\n"
+        "async def main():\n"
+        '    fut = m.verify_stream("/dev/zero", b"k", max_line_len=8)\n'
+        "    del fut\n"
+        "asyncio.run(main())\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    stderr = proc.stderr or ""
+    assert proc.returncode == 0, (proc.returncode, proc.stdout, stderr)
+    assert "FATAL" not in stderr
+    assert "exception not rethrown" not in stderr
+    assert "not initialized" not in stderr
+    assert "panicked" not in stderr
 
 
 def test_stream_limits_panic():

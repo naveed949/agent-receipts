@@ -192,7 +192,16 @@ fn stream_public_items_are_pinned() {
         .and_then(|slots| slots.checked_mul(1_048_576))
         .and_then(|lines| lines.checked_add(8192))
         .expect("line-buffer ceiling");
-    let parse_trees = 1_048_576usize.checked_mul(4).expect("parse trees");
+    let nodes = 1_048_576usize.saturating_sub(1) / 2;
+    let grown = if nodes == 0 {
+        0
+    } else {
+        nodes.next_power_of_two()
+    };
+    let cap = if grown != 0 && grown < 4 { 4 } else { grown };
+    let parse_trees = cap
+        .checked_mul(std::mem::size_of::<Json>())
+        .expect("parse trees");
     assert_eq!(limits.max_retained_line_bytes(), line_buffers);
     assert_eq!(limits.max_parse_tree_bytes(), parse_trees);
     assert_eq!(

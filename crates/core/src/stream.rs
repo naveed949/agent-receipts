@@ -85,7 +85,7 @@ impl Default for StreamLimits {
 }
 
 const MAX_CHANNEL_CAPACITY: usize = usize::MAX >> 3;
-const PARSE_TREE_BYTE_FACTOR: usize = 4;
+const JSON_NODE_BYTES: usize = std::mem::size_of::<crate::Json>();
 
 const fn retained_line_bytes(capacity: usize, max_line_len: usize) -> Option<usize> {
     let slots = match capacity.checked_add(2) {
@@ -100,7 +100,18 @@ const fn retained_line_bytes(capacity: usize, max_line_len: usize) -> Option<usi
 }
 
 const fn parse_tree_bytes(max_line_len: usize) -> Option<usize> {
-    max_line_len.checked_mul(PARSE_TREE_BYTE_FACTOR)
+    // Densest in-limit tree is `[0,0,...,0]`: (max_line_len-1)/2 numbers.
+    // Vec's first non-empty alloc for a 32-byte Json is 4, then doubles.
+    let n = max_line_len.saturating_sub(1) / 2;
+    if n == 0 {
+        return Some(0);
+    }
+    if n > (usize::MAX >> 1) {
+        return None;
+    }
+    let grown = n.next_power_of_two();
+    let cap = if grown < 4 { 4 } else { grown };
+    cap.checked_mul(JSON_NODE_BYTES)
 }
 
 const fn check_limits(capacity: usize, max_line_len: usize) -> Result<(), LimitsError> {
@@ -341,9 +352,9 @@ mod tests {
     use std::task::{Context, Poll};
 
     use super::{
-        classify_line, read_frames, verify_audit_receipt_lines, AuditReceiptCounts, LimitsError,
-        LineClass, StreamLimits, DEFAULT_MAX_LINE_LEN, DEFAULT_STREAM_CAPACITY,
-        MAX_CHANNEL_CAPACITY, PARSE_TREE_BYTE_FACTOR, READ_CHUNK,
+        classify_line, parse_tree_bytes, read_frames, verify_audit_receipt_lines,
+        AuditReceiptCounts, LimitsError, LineClass, StreamLimits, DEFAULT_MAX_LINE_LEN,
+        DEFAULT_STREAM_CAPACITY, MAX_CHANNEL_CAPACITY, READ_CHUNK,
     };
     use crate::{parse::parse, Json, Wtf16};
     use tokio::io::{AsyncRead, ReadBuf};
@@ -361,9 +372,7 @@ mod tests {
         assert_eq!(limits.max_retained_line_bytes(), line_buffers);
         assert_eq!(
             limits.max_parse_tree_bytes(),
-            DEFAULT_MAX_LINE_LEN
-                .checked_mul(PARSE_TREE_BYTE_FACTOR)
-                .expect("trees")
+            parse_tree_bytes(DEFAULT_MAX_LINE_LEN).expect("trees")
         );
         assert_eq!(
             limits.with_capacity(0).unwrap_err(),
@@ -673,33 +682,59 @@ mod tests {
         let trees = std::panic::catch_unwind(|| limits.max_parse_tree_bytes());
         assert_eq!(
             trees.expect("default trees"),
-            DEFAULT_MAX_LINE_LEN * PARSE_TREE_BYTE_FACTOR
+            parse_tree_bytes(DEFAULT_MAX_LINE_LEN).expect("trees")
         );
     }
 
-    #[test]
-    fn memory_ceiling_understatement() {
-        let limits = StreamLimits::default();
-        let line_buffers = limits
-            .capacity()
-            .checked_add(2)
-            .and_then(|slots| slots.checked_mul(limits.max_line_len()))
-            .and_then(|lines| lines.checked_add(READ_CHUNK))
-            .expect("line-buffer ceiling");
-        let parse_trees = limits
-            .max_line_len()
-            .checked_mul(PARSE_TREE_BYTE_FACTOR)
-            .expect("parse trees");
-        let rss = line_buffers
-            .checked_add(parse_trees)
-            .expect("process RSS bound");
-        assert_eq!(limits.max_retained_line_bytes(), line_buffers);
-        assert_eq!(limits.max_parse_tree_bytes(), parse_trees);
-        assert!(rss > line_buffers);
-        assert_eq!(
-            rss - line_buffers,
-            limits.max_line_len() * PARSE_TREE_BYTE_FACTOR
+    #[tokio::test]
+    async fn memory_ceiling_understatement() {
+        let max_line_len = 8191;
+        let limits = StreamLimits::default()
+            .with_capacity(1)
+            .expect("capacity")
+            .with_max_line_len(max_line_len)
+            .expect("max line");
+        let line = dense_number_array_line(max_line_len);
+        let value = parse(&line).expect("number array");
+        let tree = crate::json_retained_bytes(&value);
+        let old_factor = max_line_len.checked_mul(4).expect("old 4x");
+        assert!(
+            tree > old_factor,
+            "tree {tree} must exceed the old 4*max_line_len bound {old_factor}"
         );
+        assert!(
+            tree <= limits.max_parse_tree_bytes(),
+            "tree {tree} exceeds max_parse_tree_bytes {}",
+            limits.max_parse_tree_bytes()
+        );
+        assert_eq!(
+            limits.max_parse_tree_bytes(),
+            parse_tree_bytes(max_line_len).expect("trees")
+        );
+        let mut file = line;
+        file.push(b'\n');
+        let counts = count_bytes(&file, b"k", limits).await;
+        assert_eq!(counts.ok, 0);
+        assert_eq!(counts.invalid, 1);
+        assert_eq!(counts.malformed, 0);
+    }
+
+    fn dense_number_array_line(max_line_len: usize) -> Vec<u8> {
+        let mut line = Vec::with_capacity(max_line_len);
+        line.push(b'[');
+        while line.len() + 2 < max_line_len {
+            line.push(b'0');
+            line.push(b',');
+        }
+        if line.len() + 1 < max_line_len {
+            line.push(b'0');
+        }
+        while line.len() + 1 < max_line_len {
+            line.push(b' ');
+        }
+        line.push(b']');
+        assert_eq!(line.len(), max_line_len);
+        line
     }
 
     async fn count_bytes(bytes: &[u8], key: &[u8], limits: StreamLimits) -> AuditReceiptCounts {
@@ -960,7 +995,7 @@ mod tests {
         assert_eq!(counts.lines(), 1_000_000);
         let secs = elapsed.as_secs_f64();
         println!(
-            "method line_buffer_ceiling=(capacity+2)*max_line_len+READ_CHUNK={} parse_trees=2*utf16*max_line_len={} process_rss_bound={}; results consumed; line count asserted; line-buffer ceiling is computed from StreamLimits, not a 4 MB product bound; this run's lines were {} B so RSS is not that ceiling",
+            "method line_buffer_ceiling=(capacity+2)*max_line_len+READ_CHUNK={} parse_trees=next_pow2((max_line_len-1)/2)*size_of::<Json>={} process_rss_bound={}; results consumed; line count asserted; line-buffer ceiling is computed from StreamLimits, not a 4 MB product bound; this run's lines were {} B so RSS is not that ceiling",
             limits.max_retained_line_bytes(),
             limits.max_parse_tree_bytes(),
             limits

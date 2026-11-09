@@ -214,6 +214,28 @@ impl Json {
     }
 }
 
+#[cfg(all(test, feature = "stream"))]
+pub(crate) fn json_retained_bytes(value: &Json) -> usize {
+    match &value.node {
+        Node::Null | Node::Bool(_) | Node::Number(_) => 0,
+        Node::String(text) => text.units.capacity() * std::mem::size_of::<u16>(),
+        Node::Array(items) => {
+            items.capacity() * std::mem::size_of::<Json>()
+                + items.iter().map(json_retained_bytes).sum::<usize>()
+        }
+        Node::Object(entries) => {
+            entries.capacity() * std::mem::size_of::<(Wtf16, Json)>()
+                + entries
+                    .iter()
+                    .map(|(key, child)| {
+                        key.units.capacity() * std::mem::size_of::<u16>()
+                            + json_retained_bytes(child)
+                    })
+                    .sum::<usize>()
+        }
+    }
+}
+
 /// `depth` counts the container being entered. `128` succeeds and `129` is `too_deep`.
 /// Scalars do not call this.
 pub fn check_depth(depth: usize) -> Result<(), Error> {
