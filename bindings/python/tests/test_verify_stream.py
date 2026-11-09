@@ -132,8 +132,25 @@ def test_python_del_leak(tmp_path):
     assert any(kind == "epipe" for kind, _ in writes), writes
 
 
+def _child_exits_clean(script, repeats=8):
+    for _ in range(repeats):
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        stderr = proc.stderr or ""
+        assert proc.returncode == 0, (proc.returncode, proc.stdout, stderr)
+        assert "FATAL" not in stderr
+        assert "exception not rethrown" not in stderr
+        assert "not initialized" not in stderr
+        assert "panicked" not in stderr
+
+
 def test_python_del_leak_exit():
-    script = (
+    _child_exits_clean(
         "import asyncio\n"
         "import agent_receipts as m\n"
         "async def main():\n"
@@ -141,19 +158,53 @@ def test_python_del_leak_exit():
         "    del fut\n"
         "asyncio.run(main())\n"
     )
-    proc = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
+
+
+def test_python_await_then_exit():
+    _child_exits_clean(
+        "import asyncio\n"
+        "import agent_receipts as m\n"
+        "async def main():\n"
+        '    fut = m.verify_stream("/dev/zero", b"k", max_line_len=8)\n'
+        "    it = fut.__await__()\n"
+        "    del it\n"
+        "    del fut\n"
+        "asyncio.run(main())\n"
     )
-    stderr = proc.stderr or ""
-    assert proc.returncode == 0, (proc.returncode, proc.stdout, stderr)
-    assert "FATAL" not in stderr
-    assert "exception not rethrown" not in stderr
-    assert "not initialized" not in stderr
-    assert "panicked" not in stderr
+
+
+def test_python_wait_for_timeout_exit():
+    _child_exits_clean(
+        "import asyncio\n"
+        "import agent_receipts as m\n"
+        "async def main():\n"
+        "    try:\n"
+        '        await asyncio.wait_for(m.verify_stream("/dev/zero", b"k", max_line_len=8), 0.01)\n'
+        "    except (asyncio.TimeoutError, asyncio.CancelledError):\n"
+        "        pass\n"
+        "asyncio.run(main())\n"
+    )
+
+
+def test_python_gather_cancel_exit():
+    _child_exits_clean(
+        "import asyncio\n"
+        "import agent_receipts as m\n"
+        "async def main():\n"
+        "    async def both():\n"
+        "        return await asyncio.gather(\n"
+        '            m.verify_stream("/dev/zero", b"k", max_line_len=8),\n'
+        "            asyncio.Event().wait(),\n"
+        "        )\n"
+        "    task = asyncio.create_task(both())\n"
+        "    await asyncio.sleep(0.01)\n"
+        "    task.cancel()\n"
+        "    try:\n"
+        "        await task\n"
+        "    except asyncio.CancelledError:\n"
+        "        pass\n"
+        "asyncio.run(main())\n"
+    )
 
 
 def test_stream_limits_panic():

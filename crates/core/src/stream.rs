@@ -99,10 +99,9 @@ const fn retained_line_bytes(capacity: usize, max_line_len: usize) -> Option<usi
     lines.checked_add(READ_CHUNK)
 }
 
-const fn parse_tree_bytes(max_line_len: usize) -> Option<usize> {
-    // Densest in-limit tree is `[0,0,...,0]`: (max_line_len-1)/2 numbers.
-    // Vec's first non-empty alloc for a 32-byte Json is 4, then doubles.
-    let n = max_line_len.saturating_sub(1) / 2;
+const MIN_JSON_VEC_CAP: usize = 4;
+
+const fn json_vec_cap(n: usize) -> Option<usize> {
     if n == 0 {
         return Some(0);
     }
@@ -110,8 +109,69 @@ const fn parse_tree_bytes(max_line_len: usize) -> Option<usize> {
         return None;
     }
     let grown = n.next_power_of_two();
-    let cap = if grown < 4 { 4 } else { grown };
-    cap.checked_mul(JSON_NODE_BYTES)
+    Some(if grown < MIN_JSON_VEC_CAP {
+        MIN_JSON_VEC_CAP
+    } else {
+        grown
+    })
+}
+
+const fn parse_tree_bytes(max_line_len: usize) -> Option<usize> {
+    // Number array `[0,0,...,0]`: (max_line_len-1)/2 nodes, Vec next power of two.
+    // Nested `[[0],[0],...]` (and deeper 1-element spines) is denser: each inner
+    // array pays Vec's 4-slot minimum for a 32-byte Json.
+    let n = max_line_len.saturating_sub(1) / 2;
+    let cap = match json_vec_cap(n) {
+        Some(cap) => cap,
+        None => return None,
+    };
+    let mut best = match cap.checked_mul(JSON_NODE_BYTES) {
+        Some(bytes) => bytes,
+        None => return None,
+    };
+    let mut depth = 1usize;
+    while depth <= crate::MAX_DEPTH {
+        let two = match depth.checked_mul(2) {
+            Some(two) => two,
+            None => return None,
+        };
+        let item = match two.checked_add(2) {
+            Some(item) => item,
+            None => return None,
+        };
+        if item < max_line_len {
+            let n = (max_line_len - 2) / item;
+            let cap = match json_vec_cap(n) {
+                Some(cap) => cap,
+                None => return None,
+            };
+            let outer = match cap.checked_mul(JSON_NODE_BYTES) {
+                Some(bytes) => bytes,
+                None => return None,
+            };
+            let inner_nodes = match n.checked_mul(depth) {
+                Some(nodes) => nodes,
+                None => return None,
+            };
+            let inner_slots = match inner_nodes.checked_mul(MIN_JSON_VEC_CAP) {
+                Some(slots) => slots,
+                None => return None,
+            };
+            let inner = match inner_slots.checked_mul(JSON_NODE_BYTES) {
+                Some(bytes) => bytes,
+                None => return None,
+            };
+            let total = match outer.checked_add(inner) {
+                Some(total) => total,
+                None => return None,
+            };
+            if total > best {
+                best = total;
+            }
+        }
+        depth += 1;
+    }
+    Some(best)
 }
 
 const fn check_limits(capacity: usize, max_line_len: usize) -> Result<(), LimitsError> {
@@ -352,9 +412,9 @@ mod tests {
     use std::task::{Context, Poll};
 
     use super::{
-        classify_line, parse_tree_bytes, read_frames, verify_audit_receipt_lines,
+        classify_line, json_vec_cap, parse_tree_bytes, read_frames, verify_audit_receipt_lines,
         AuditReceiptCounts, LimitsError, LineClass, StreamLimits, DEFAULT_MAX_LINE_LEN,
-        DEFAULT_STREAM_CAPACITY, MAX_CHANNEL_CAPACITY, READ_CHUNK,
+        DEFAULT_STREAM_CAPACITY, JSON_NODE_BYTES, MAX_CHANNEL_CAPACITY, READ_CHUNK,
     };
     use crate::{parse::parse, Json, Wtf16};
     use tokio::io::{AsyncRead, ReadBuf};
@@ -694,29 +754,62 @@ mod tests {
             .expect("capacity")
             .with_max_line_len(max_line_len)
             .expect("max line");
-        let line = dense_number_array_line(max_line_len);
-        let value = parse(&line).expect("number array");
-        let tree = crate::json_retained_bytes(&value);
+        let bound = limits.max_parse_tree_bytes();
+        assert_eq!(bound, parse_tree_bytes(max_line_len).expect("trees"));
         let old_factor = max_line_len.checked_mul(4).expect("old 4x");
+        let number_line = dense_number_array_line(max_line_len);
+        let number_tree = crate::json_retained_bytes(&parse(&number_line).expect("number array"));
         assert!(
-            tree > old_factor,
-            "tree {tree} must exceed the old 4*max_line_len bound {old_factor}"
+            number_tree > old_factor,
+            "number tree {number_tree} must exceed 4*max_line_len {old_factor}"
         );
         assert!(
-            tree <= limits.max_parse_tree_bytes(),
-            "tree {tree} exceeds max_parse_tree_bytes {}",
-            limits.max_parse_tree_bytes()
+            number_tree <= bound,
+            "number tree {number_tree} exceeds max_parse_tree_bytes {bound}"
         );
-        assert_eq!(
-            limits.max_parse_tree_bytes(),
-            parse_tree_bytes(max_line_len).expect("trees")
+        let nested_line = dense_nested_singleton_line(max_line_len);
+        let nested_tree =
+            crate::json_retained_bytes(&parse(&nested_line).expect("nested singletons"));
+        let number_only = json_vec_cap((max_line_len - 1) / 2)
+            .and_then(|cap| cap.checked_mul(JSON_NODE_BYTES))
+            .expect("number-only");
+        assert!(
+            nested_tree > number_only,
+            "nested tree {nested_tree} must exceed the number-array bound {number_only}"
         );
-        let mut file = line;
+        assert!(
+            nested_tree <= bound,
+            "nested tree {nested_tree} exceeds max_parse_tree_bytes {bound}"
+        );
+        let mut file = nested_line;
         file.push(b'\n');
         let counts = count_bytes(&file, b"k", limits).await;
         assert_eq!(counts.ok, 0);
         assert_eq!(counts.invalid, 1);
         assert_eq!(counts.malformed, 0);
+    }
+
+    fn dense_nested_singleton_line(max_line_len: usize) -> Vec<u8> {
+        let mut line = Vec::with_capacity(max_line_len);
+        line.push(b'[');
+        let mut first = true;
+        loop {
+            let extra = if first { 3 } else { 4 };
+            if line.len() + extra + 1 > max_line_len {
+                break;
+            }
+            if !first {
+                line.push(b',');
+            }
+            first = false;
+            line.extend_from_slice(b"[0]");
+        }
+        while line.len() + 1 < max_line_len {
+            line.push(b' ');
+        }
+        line.push(b']');
+        assert_eq!(line.len(), max_line_len);
+        line
     }
 
     fn dense_number_array_line(max_line_len: usize) -> Vec<u8> {
@@ -995,7 +1088,7 @@ mod tests {
         assert_eq!(counts.lines(), 1_000_000);
         let secs = elapsed.as_secs_f64();
         println!(
-            "method line_buffer_ceiling=(capacity+2)*max_line_len+READ_CHUNK={} parse_trees=next_pow2((max_line_len-1)/2)*size_of::<Json>={} process_rss_bound={}; results consumed; line count asserted; line-buffer ceiling is computed from StreamLimits, not a 4 MB product bound; this run's lines were {} B so RSS is not that ceiling",
+            "method line_buffer_ceiling=(capacity+2)*max_line_len+READ_CHUNK={} parse_trees=max(number_array, nested_singleton_spines)={} process_rss_bound={}; results consumed; line count asserted; line-buffer ceiling is computed from StreamLimits, not a 4 MB product bound; this run's lines were {} B so RSS is not that ceiling",
             limits.max_retained_line_bytes(),
             limits.max_parse_tree_bytes(),
             limits

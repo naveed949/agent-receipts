@@ -484,41 +484,113 @@ fn verify_stream<'py>(
     .map(|bound| bound.into_any())
 }
 
+type StreamWork = tokio::task::JoinHandle<Result<receipts::AuditReceiptCounts, std::io::Error>>;
+
+fn counts_dict(py: Python<'_>, counts: receipts::AuditReceiptCounts) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("ok", counts.ok)?;
+    dict.set_item("invalid", counts.invalid)?;
+    dict.set_item("malformed", counts.malformed)?;
+    Ok(dict.unbind().into_any())
+}
+
+fn join_stream_work(py: Python<'_>, handle: StreamWork) -> PyResult<Py<PyAny>> {
+    match pyo3_async_runtimes::tokio::get_runtime().block_on(handle) {
+        Ok(Ok(counts)) => counts_dict(py, counts),
+        Ok(Err(err)) => Err(PyErr::from(err)),
+        Err(join) if join.is_cancelled() => Err(PyErr::from_value(
+            PyModule::import(py, "asyncio")?
+                .getattr("CancelledError")?
+                .call0()?,
+        )),
+        Err(join) => Err(PyException::new_err(format!(
+            "rust future panicked: {join}"
+        ))),
+    }
+}
+
 #[pyclass(name = "_StreamAwait", module = "agent_receipts")]
 struct StreamAwait {
     abort: Option<tokio::task::AbortHandle>,
-    handle: Option<tokio::task::JoinHandle<Result<receipts::AuditReceiptCounts, std::io::Error>>>,
+    handle: Option<StreamWork>,
     inner: Option<Py<PyAny>>,
 }
 
 #[pymethods]
 impl StreamAwait {
-    fn __await__(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<StreamAwaitIter>> {
+    fn poll(slf: Py<Self>, py: Python<'_>) -> PyResult<()> {
+        let event_loop = match PyModule::import(py, "asyncio")?.call_method0("get_running_loop") {
+            Ok(event_loop) => event_loop,
+            Err(_) => return Ok(()),
+        };
+        if event_loop
+            .call_method0("is_closed")
+            .ok()
+            .and_then(|value| value.extract().ok())
+            .unwrap_or(true)
         {
-            let mut this = slf.bind(py).borrow_mut();
-            if this.inner.is_none() {
-                let handle = this.handle.take().ok_or_else(|| {
-                    PyException::new_err("verify_stream awaitable already consumed")
-                })?;
-                let waiter = async move {
-                    match handle.await {
-                        Ok(Ok(counts)) => Python::attach(|py| {
-                            let dict = PyDict::new(py);
-                            dict.set_item("ok", counts.ok)?;
-                            dict.set_item("invalid", counts.invalid)?;
-                            dict.set_item("malformed", counts.malformed)?;
-                            Ok(dict.unbind())
-                        }),
-                        Ok(Err(err)) => Err(PyErr::from(err)),
-                        Err(err) if err.is_cancelled() => Err(PyException::new_err("cancelled")),
-                        Err(err) => {
-                            Err(PyException::new_err(format!("rust future panicked: {err}")))
-                        }
-                    }
-                };
-                let fut = pyo3_async_runtimes::tokio::future_into_py(py, waiter)?;
-                this.inner = Some(fut.unbind());
+            return Ok(());
+        }
+        let finished = {
+            let owner = slf.bind(py).borrow();
+            match owner.handle.as_ref() {
+                Some(handle) => handle.is_finished(),
+                None => true,
             }
+        };
+        if !finished {
+            event_loop.call_method1("call_soon", (slf.bind(py).getattr("poll")?,))?;
+            return Ok(());
+        }
+        let (handle, inner) = {
+            let mut owner = slf.bind(py).borrow_mut();
+            (
+                owner.handle.take(),
+                owner.inner.as_ref().map(|inner| inner.clone_ref(py)),
+            )
+        };
+        let Some(handle) = handle else {
+            return Ok(());
+        };
+        let Some(inner) = inner else {
+            return Ok(());
+        };
+        let fut = inner.bind(py);
+        if fut
+            .call_method0("done")
+            .ok()
+            .and_then(|value| value.extract().ok())
+            .unwrap_or(true)
+        {
+            return Ok(());
+        }
+        match join_stream_work(py, handle) {
+            Ok(dict) => {
+                let _ = fut.call_method1("set_result", (dict,));
+            }
+            Err(err) => {
+                let _ = fut.call_method1("set_exception", (err.value(py),));
+            }
+        }
+        Ok(())
+    }
+
+    fn __await__(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<StreamAwaitIter>> {
+        let schedule = {
+            let mut this = slf.bind(py).borrow_mut();
+            if this.inner.is_some() {
+                false
+            } else {
+                let event_loop =
+                    PyModule::import(py, "asyncio")?.call_method0("get_running_loop")?;
+                let py_fut = event_loop.call_method0("create_future")?;
+                this.inner = Some(py_fut.unbind());
+                true
+            }
+        };
+        if schedule {
+            let event_loop = PyModule::import(py, "asyncio")?.call_method0("get_running_loop")?;
+            event_loop.call_method1("call_soon", (slf.bind(py).getattr("poll")?,))?;
         }
         let inner = slf
             .bind(py)
@@ -570,12 +642,22 @@ impl StreamAwaitIter {
 
     #[pyo3(signature = (*args))]
     fn throw(&self, py: Python<'_>, args: Bound<'_, PyTuple>) -> PyResult<Py<PyAny>> {
+        abort_owner(py, &self._owner);
         Ok(self.inner.bind(py).call_method1("throw", args)?.unbind())
     }
 
     fn close(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        abort_owner(py, &self._owner);
         Ok(self.inner.bind(py).call_method0("close")?.unbind())
     }
+}
+
+fn abort_owner(py: Python<'_>, owner: &Py<StreamAwait>) {
+    let mut this = owner.bind(py).borrow_mut();
+    if let Some(abort) = this.abort.take() {
+        abort.abort();
+    }
+    let _ = this.handle.take();
 }
 
 fn copied_stream_key(value: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {

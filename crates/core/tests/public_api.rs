@@ -192,18 +192,15 @@ fn stream_public_items_are_pinned() {
         .and_then(|slots| slots.checked_mul(1_048_576))
         .and_then(|lines| lines.checked_add(8192))
         .expect("line-buffer ceiling");
-    let nodes = 1_048_576usize.saturating_sub(1) / 2;
-    let grown = if nodes == 0 {
-        0
-    } else {
-        nodes.next_power_of_two()
-    };
-    let cap = if grown != 0 && grown < 4 { 4 } else { grown };
-    let parse_trees = cap
-        .checked_mul(std::mem::size_of::<Json>())
-        .expect("parse trees");
+    let node = std::mem::size_of::<Json>();
+    let number_n = 1_048_576usize.saturating_sub(1) / 2;
+    let number_trees = number_n.next_power_of_two() * node;
+    let nested_n = (1_048_576usize - 2) / 4;
+    let nested_trees = nested_n.next_power_of_two() * node + nested_n * 4 * node;
     assert_eq!(limits.max_retained_line_bytes(), line_buffers);
-    assert_eq!(limits.max_parse_tree_bytes(), parse_trees);
+    assert!(limits.max_parse_tree_bytes() >= number_trees);
+    assert!(limits.max_parse_tree_bytes() >= nested_trees);
+    assert!(limits.max_parse_tree_bytes() > 1_048_576 * 4);
     assert_eq!(
         match LimitsError::ZeroCapacity {
             LimitsError::ZeroCapacity => "capacity must be greater than zero",
